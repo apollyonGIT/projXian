@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#07100e">
+  <meta name="description" content="《问道·斗法》——一场在山门论剑台上展开的东方修仙即时斗法。">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2307110f'/%3E%3Ccircle cx='32' cy='32' r='24' fill='none' stroke='%23c8ae74' stroke-width='1.5'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-size='31' font-family='serif' fill='%23e5ca8c'%3E斗%3C/text%3E%3C/svg%3E">
+  <title>问道 · 斗法</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="mode-start">
+  <div id="app">
+    <canvas id="gameCanvas" aria-label="山门论剑台斗法场景"></canvas>
+    <div class="paper-grain" aria-hidden="true"></div>
+    <div class="vignette" aria-hidden="true"></div>
+
+    <header id="hud" class="hud" aria-label="双方战斗状态">
+      <section class="fighter-panel player-panel" id="playerPanel" aria-label="玩家状态">
+        <div class="fighter-seal" aria-hidden="true">青</div>
+        <div class="fighter-main">
+          <div class="fighter-heading">
+            <div>
+              <div class="fighter-role">青衫客</div>
+              <h2 id="playerName">云归</h2>
+            </div>
+            <span class="fighter-state" id="playerState">凝神</span>
+          </div>
+          <div class="bar hp-bar" aria-label="生命值">
+            <span class="bar-fill" id="playerHpFill"></span>
+            <span class="bar-label">气血</span>
+            <span class="bar-value" id="playerHpText">200 / 200</span>
+          </div>
+          <div class="bar mana-bar" aria-label="灵力值">
+            <span class="bar-fill" id="playerManaFill"></span>
+            <span class="bar-label">灵力</span>
+            <span class="bar-value" id="playerManaText">100 / 100</span>
+          </div>
+          <div class="status-row">
+            <span class="status-chip melee-chip">近战 <b id="playerMeleeCombo">0</b></span>
+            <span class="status-chip ranged-chip">灵子 <b id="playerRangedCombo">0</b></span>
+            <span class="status-chip empower-chip" id="playerEmpower">闪避强化 · 无</span>
+            <span class="status-chip danger-chip" id="playerExhaust" hidden>灵力枯竭</span>
+            <span class="status-chip calm-chip" id="playerMeditate" hidden>打坐中</span>
+          </div>
+        </div>
+      </section>
+
+      <div class="hud-center">
+        <div class="brand-seal" aria-hidden="true"><span>斗</span></div>
+        <div class="brand-name">问道 · 斗法</div>
+        <div class="memory-note" id="memoryNote">山门论剑</div>
+        <button type="button" class="settings-button" id="settingsBtn" aria-label="打开战斗设置">
+          <span aria-hidden="true">⚙</span><span class="settings-text">设置</span>
+        </button>
+      </div>
+
+      <section class="fighter-panel enemy-panel" id="enemyPanel" aria-label="敌方状态">
+        <div class="fighter-main">
+          <div class="fighter-heading">
+            <div>
+              <div class="fighter-role">朱衣客</div>
+              <h2 id="enemyName">烬无咎</h2>
+            </div>
+            <span class="fighter-state" id="enemyState">观势</span>
+          </div>
+          <div class="bar hp-bar" aria-label="生命值">
+            <span class="bar-fill" id="enemyHpFill"></span>
+            <span class="bar-label">气血</span>
+            <span class="bar-value" id="enemyHpText">200 / 200</span>
+          </div>
+          <div class="bar mana-bar" aria-label="灵力值">
+            <span class="bar-fill" id="enemyManaFill"></span>
+            <span class="bar-label">灵力</span>
+            <span class="bar-value" id="enemyManaText">100 / 100</span>
+          </div>
+          <div class="status-row">
+            <span class="status-chip melee-chip">近战 <b id="enemyMeleeCombo">0</b></span>
+            <span class="status-chip ranged-chip">灵子 <b id="enemyRangedCombo">0</b></span>
+            <span class="status-chip empower-chip" id="enemyEmpower">闪避强化 · 无</span>
+            <span class="status-chip danger-chip" id="enemyExhaust" hidden>灵力枯竭</span>
+            <span class="status-chip calm-chip" id="enemyMeditate" hidden>打坐中</span>
+          </div>
+        </div>
+        <div class="fighter-seal" aria-hidden="true">朱</div>
+      </section>
+    </header>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <main class="overlay-root">
+      <section id="startScreen" class="screen start-screen" aria-labelledby="gameTitle">
+        <div class="start-inner">
+          <div class="kicker"><span></span>山门论剑 · 一战定心<span></span></div>
+          <div class="title-lockup">
+            <div class="title-cloud cloud-left" aria-hidden="true"></div>
+            <h1 id="gameTitle">问道<span>·</span>斗法</h1>
+            <div class="title-cloud cloud-right" aria-hidden="true"></div>
+          </div>
+          <p class="subtitle">云海千峰，剑意一线。以灵为刃，以静为盾。</p>
+          <p class="lore">
+            山门夜开，论剑台上阵纹初亮。你与朱衣客各执一念，踏入此局——
+            不退，不避，只问谁的道心更坚。
+          </p>
+
+          <div class="start-controls" aria-label="操作说明">
+            <div class="control-cell"><kbd>W A S D</kbd><span>踏罡移动</span></div>
+            <div class="control-cell"><kbd>左键</kbd><span>挥剑近战</span></div>
+            <div class="control-cell"><kbd>右键</kbd><span>御灵飞射</span></div>
+            <div class="control-cell"><kbd>空格</kbd><span>贴地闪避</span></div>
+            <div class="control-cell"><kbd>F</kbd><span>打坐回灵</span></div>
+            <div class="control-cell"><kbd>鼠标</kbd><span>剑指方向</span></div>
+          </div>
+
+          <div class="rule-note">
+            <span>气血 200</span><i></i><span>灵力 100</span><i></i><span>灵子前2发免灵</span><i></i><span>拼刀刷新闪避</span><i></i><span>闪避成功清空连击</span><i></i><span>闪避后一击强化</span>
+          </div>
+
+          <div class="start-actions">
+            <button type="button" class="primary-button" id="startBtn">踏入论剑台</button>
+            <button type="button" class="online-button" id="onlineBtn">联机论剑</button>
+            <button type="button" class="ghost-button" id="startSettingsBtn">斗法设置</button>
+          </div>
+          <p class="memory-line" id="startMemory">此局无旧忆，朱衣客尚不知你的招式。</p>
+        </div>
+      </section>
+
+      <section id="settingsScreen" class="screen modal-screen" hidden aria-labelledby="settingsTitle">
+        <div class="modal-panel settings-panel" role="dialog" aria-modal="true" aria-describedby="settingsDesc">
+          <div class="panel-ornament" aria-hidden="true"></div>
+          <div class="eyebrow">斗 法 调 律</div>
+          <h2 id="settingsTitle">论剑台设置</h2>
+          <p class="panel-desc" id="settingsDesc">双方共享同一套斗法尺度。调整后立即应用于敌我双方。</p>
+
+          <div class="setting-block">
+            <div class="setting-heading">
+              <label for="meleeRangeInput">近战范围</label>
+              <output id="meleeRangeOutput" for="meleeRangeInput">118</output>
+            </div>
+            <input type="range" id="meleeRangeInput" min="80" max="170" step="1" value="118">
+            <div class="setting-scale"><span>贴身短打</span><span>剑气远及</span></div>
+            <p class="setting-hint">实际命中距离与弧形剑光半径保持同步。</p>
+          </div>
+
+          <div class="setting-block">
+            <div class="setting-heading">
+              <label for="orbSpeedInput">灵子初速</label>
+              <output id="orbSpeedOutput" for="orbSpeedInput">420</output>
+            </div>
+            <input type="range" id="orbSpeedInput" min="260" max="560" step="10" value="420">
+            <div class="setting-scale"><span>沉缓</span><span>疾掠</span></div>
+            <p class="setting-hint">灵子会在飞行中逐渐加速，敌我同速。</p>
+          </div>
+
+          <div class="setting-block">
+            <div class="setting-heading">
+              <label for="moveSpeedInput">移动速度</label>
+              <output id="moveSpeedOutput" for="moveSpeedInput">100%</output>
+            </div>
+            <input type="range" id="moveSpeedInput" min="100" max="300" step="5" value="100">
+            <div class="setting-scale"><span>当前速度 100%</span><span>三倍疾行 300%</span></div>
+            <p class="setting-hint">双方共享 · 以基础移动速度为 100%，不改变闪避冲刺距离。</p>
+          </div>
+
+          <div class="settings-notice">
+            <span aria-hidden="true">◈</span>
+            设置会被保存，下次推门而入仍然沿用。
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" class="ghost-button" id="cancelSettingsBtn">取消</button>
+            <button type="button" class="primary-button" id="applySettingsBtn">确定并继续</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="onlineScreen" class="screen modal-screen online-screen" hidden aria-labelledby="onlineTitle">
+        <div class="modal-panel online-panel" role="dialog" aria-modal="true" aria-describedby="onlineDesc">
+          <div class="panel-ornament" aria-hidden="true"></div>
+          <div class="eyebrow">联 机 论 剑</div>
+          <h2 id="onlineTitle">以剑会友</h2>
+          <p class="panel-desc" id="onlineDesc">创建一间论剑房，把房间号或邀请链接发给朋友。好友加入后，由房主开启对局。</p>
+
+          <div id="onlineSetup" class="online-setup">
+            <button type="button" class="primary-button online-create" id="onlineCreateBtn">创建房间</button>
+            <div class="online-or"><span>或</span></div>
+            <label class="online-label" for="onlineCodeInput">输入好友的房间号</label>
+            <div class="online-join-row">
+              <input id="onlineCodeInput" class="online-code-input" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="5" placeholder="A7K2M" aria-label="好友的房间号">
+              <button type="button" class="ghost-button" id="onlineJoinBtn">加入房间</button>
+            </div>
+            <button type="button" class="online-back-button" id="onlineBackBtn">返回山门</button>
+          </div>
+
+          <div id="onlineRoom" class="online-room" hidden>
+            <span class="online-room-label">房 间 号</span>
+            <strong class="online-code" id="onlineCode">-----</strong>
+            <div class="online-invite-row">
+              <button type="button" class="ghost-button online-copy" id="onlineCopyBtn">复制邀请链接</button>
+              <span class="online-copy-hint" id="onlineCopyHint" aria-live="polite"></span>
+            </div>
+            <p class="online-status" id="onlineStatus" aria-live="polite">正在等待好友加入…</p>
+            <div class="online-players">
+              <div><span>你</span><b id="onlineRole">房主</b></div>
+              <div><span>道友</span><b id="onlinePeer">尚未入场</b></div>
+            </div>
+            <div class="modal-actions">
+              <button type="button" class="ghost-button" id="onlineLeaveBtn">离开房间</button>
+              <button type="button" class="primary-button" id="onlineStartBtn" disabled>等待好友</button>
+            </div>
+          </div>
+
+          <p class="online-error" id="onlineError" role="status" aria-live="polite" hidden></p>
+          <p class="online-note">好友对战由房主页面进行战斗同步；房主需保持页面开启。联机模式使用固定规则，设置以房主为准。</p>
+        </div>
+      </section>
+
+      <section id="resultScreen" class="screen modal-screen result-screen" hidden aria-labelledby="resultTitle">
+        <div class="modal-panel result-panel" role="dialog" aria-modal="true">
+          <div class="panel-ornament" aria-hidden="true"></div>
+          <div class="result-seal" id="resultSeal" aria-hidden="true">胜</div>
+          <div class="eyebrow" id="resultEyebrow">此 局 已 定</div>
+          <h2 id="resultTitle">道心不折</h2>
+          <p class="result-copy" id="resultCopy">剑光落定，朱衣客退后半步，抱拳认负。</p>
+
+          <div class="result-stats">
+            <div><span>剩余气血</span><b id="resultHp">128</b></div>
+            <div><span>最高近战连击</span><b id="resultMelee">4</b></div>
+            <div><span>最高灵子连击</span><b id="resultRanged">3</b></div>
+            <div><span>造成伤害</span><b id="resultDamage">200</b></div>
+            <div><span>交战时长</span><b id="resultTime">01:24</b></div>
+            <div><span>闪避强化命中</span><b id="resultEmpowered">1</b></div>
+          </div>
+
+          <p class="result-memory" id="resultMemory"></p>
+          <div class="modal-actions">
+            <button type="button" class="ghost-button" id="backToStartBtn">返回山门</button>
+            <button type="button" class="primary-button" id="restartBtn">再战一场</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <section id="skillbar" class="skillbar" aria-label="技能与冷却">
+      <button type="button" class="skill-button" data-skill="melee" aria-label="挥剑近战，鼠标左键">
+        <span class="skill-glyph">剑</span>
+        <span class="skill-body">
+          <span class="skill-title">挥剑 <kbd>左键</kbd></span>
+          <span class="skill-sub" id="meleeSub">耗灵 5 · 20 伤害</span>
+        </span>
+        <span class="skill-cd" id="meleeCd">就绪</span>
+        <span class="cooldown-sweep" aria-hidden="true"></span>
+      </button>
+      <button type="button" class="skill-button" data-skill="orb" aria-label="发射灵子，鼠标右键">
+        <span class="skill-glyph">灵</span>
+        <span class="skill-body">
+          <span class="skill-title">御灵 <kbd>右键</kbd></span>
+          <span class="skill-sub" id="orbSub">耗灵 5 · 10 伤害</span>
+        </span>
+        <span class="skill-cd" id="orbCd">就绪</span>
+        <span class="cooldown-sweep" aria-hidden="true"></span>
+      </button>
+      <button type="button" class="skill-button" data-skill="dodge" aria-label="闪避，空格键">
+        <span class="skill-glyph">闪</span>
+        <span class="skill-body">
+          <span class="skill-title">闪避 <kbd>空格</kbd></span>
+          <span class="skill-sub" id="dodgeSub">贴地冲刺 · 无敌</span>
+        </span>
+        <span class="skill-cd" id="dodgeCd">就绪</span>
+        <span class="cooldown-sweep" aria-hidden="true"></span>
+      </button>
+      <button type="button" class="skill-button" data-skill="meditate" aria-label="打坐，F 键">
+        <span class="skill-glyph">息</span>
+        <span class="skill-body">
+          <span class="skill-title">打坐 <kbd>F</kbd></span>
+          <span class="skill-sub" id="meditateSub">回灵 20 / 秒</span>
+        </span>
+        <span class="skill-cd" id="meditateCd">就绪</span>
+        <span class="cooldown-sweep" aria-hidden="true"></span>
+      </button>
+    </section>
+
+    <div class="field-hint" aria-hidden="true">WASD 移动 · 左键挥剑 · 右键御灵 · 空格闪避 · F 打坐</div>
+  </div>
+
+  <script src="game.js" defer></script>
+</body>
+</html>

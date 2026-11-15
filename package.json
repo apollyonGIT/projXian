@@ -1,0 +1,16 @@
+{
+  "name": "wendao-doufa-online",
+  "version": "1.0.0",
+  "private": true,
+  "description": "问道·斗法 — 房间号 1v1 公网联机版",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
