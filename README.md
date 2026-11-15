@@ -2,6 +2,8 @@
 
 一款可直接在浏览器中运行的单页修仙即时斗法游戏，支持单人挑战 AI，也支持房间号 1v1 公网联机。
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/apollyonGIT/projXian)
+
 ## 运行
 
 ### 单机版
