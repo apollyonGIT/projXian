@@ -4,6 +4,8 @@
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/apollyonGIT/projXian)
 
+一键部署：<https://render.com/deploy?repo=https://github.com/apollyonGIT/projXian>
+
 ## 运行
 
 ### 单机版
