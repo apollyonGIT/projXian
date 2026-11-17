@@ -507,7 +507,6 @@
       rtt: 0,
       lastPingAt: 0,
       pingSeq: 0,
-      orbPreview: null,
       bgWorker: null,
       bgWorkerUrl: null,
       bgAccumulator: 0,
@@ -2753,16 +2752,6 @@
     if (isOnlineGuest()) {
       game.online.lastOrbActionAt = performance.now();
       const angle = getGuestAimAngle(autoAim);
-      const local = game.enemy;
-      game.online.orbPreview = local
-        ? {
-            elapsed: 0,
-            duration: 0.18,
-            angle,
-            x: local.x,
-            y: local.y,
-          }
-        : null;
       sendGuestAction('orb', angle, { origin: guestOrbOrigin() });
       return;
     }
@@ -5862,36 +5851,6 @@
     ctx.restore();
   }
 
-  function drawGuestOrbPreview() {
-    const preview = game.online.orbPreview;
-    const local = game.enemy;
-    if (!preview || !local || !isOnlineGuest()) return;
-    const progress = clamp(preview.elapsed / preview.duration, 0, 1);
-    const alpha = (1 - progress) * 0.9;
-    const s = world.scale;
-    const angle = preview.angle;
-    const handX = local.x + Math.cos(angle) * (local.radius + 12 * s);
-    const handY = local.y - 12 * s + Math.sin(angle) * (local.radius + 12 * s);
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = alpha;
-    const glow = ctx.createRadialGradient(handX, handY, 0, handX, handY, 18 * s);
-    glow.addColorStop(0, 'rgba(255,246,220,0.9)');
-    glow.addColorStop(0.4, 'rgba(230,180,120,0.45)');
-    glow.addColorStop(1, 'rgba(210,150,100,0)');
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(handX, handY, 18 * s, 0, TAU);
-    ctx.fill();
-    ctx.strokeStyle = `rgba(255,232,190,${alpha * 0.7})`;
-    ctx.lineWidth = 1.8 * s;
-    ctx.beginPath();
-    ctx.moveTo(handX, handY);
-    ctx.lineTo(handX + Math.cos(angle) * 26 * s, handY + Math.sin(angle) * 26 * s);
-    ctx.stroke();
-    ctx.restore();
-  }
-
   function renderGame() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, viewW, viewH);
@@ -5942,7 +5901,6 @@
       }
     }
 
-    drawGuestOrbPreview();
     drawGiantSwords();
     drawEffects();
     drawFloaters();
@@ -7931,7 +7889,6 @@
     game.online.rtt = 0;
     game.online.lastPingAt = 0;
     game.online.pingSeq = 0;
-    game.online.orbPreview = null;
     game.online.lastSnapshotAt = 0;
     game.online.lastSnapshotReceivedAt = 0;
     game.online.pendingActions.length = 0;
@@ -8344,12 +8301,6 @@
         local.swing.elapsed += dt;
         if (local.swing.elapsed >= local.swing.duration) local.swing = null;
       }
-      if (game.online.orbPreview) {
-        game.online.orbPreview.elapsed += dt;
-        if (game.online.orbPreview.elapsed >= game.online.orbPreview.duration) {
-          game.online.orbPreview = null;
-        }
-      }
       const move = canPredictGuestMovement(local) ? readMovementInput() : null;
       if (move && (move.x !== 0 || move.y !== 0)) {
         // 客机本地先行：输入不再等待房主往返，服务端快照只负责纠偏。
@@ -8431,9 +8382,6 @@
     });
     if (input.orbHeld && now - game.online.lastOrbActionAt >= 90) {
       game.online.lastOrbActionAt = now;
-      game.online.orbPreview = game.enemy
-        ? { elapsed: 0, duration: 0.18, angle: aimAngle, x: game.enemy.x, y: game.enemy.y }
-        : null;
       sendGuestAction('orb', aimAngle, { origin: guestOrbOrigin() });
     }
   }
@@ -9313,7 +9261,6 @@
         inputSeq: game.online.inputSeq,
         lastSnapshotReceivedAt: game.online.lastSnapshotReceivedAt,
         rtt: game.online.rtt,
-        orbPreview: Boolean(game.online.orbPreview),
         rtc: {
           supported: rtcSupported(),
           ready: game.online.rtc.ready,
