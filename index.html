@@ -34,14 +34,10 @@
           <div class="bar mana-bar" aria-label="灵力值">
             <span class="bar-fill" id="playerManaFill"></span>
             <span class="bar-label">灵力</span>
-            <span class="bar-value" id="playerManaText">100 / 100</span>
+            <span class="bar-value" id="playerManaText">300 / 300</span>
           </div>
           <div class="status-row">
-            <span class="status-chip melee-chip">近战 <b id="playerMeleeCombo">0</b></span>
-            <span class="status-chip ranged-chip">灵子 <b id="playerRangedCombo">0</b></span>
-            <span class="status-chip empower-chip" id="playerEmpower">闪避强化 · 无</span>
-            <span class="status-chip danger-chip" id="playerExhaust" hidden>灵力枯竭</span>
-            <span class="status-chip calm-chip" id="playerMeditate" hidden>打坐中</span>
+            <span class="status-chip essence-chip">精魄 <b id="playerEssenceChip">0</b></span>
           </div>
         </div>
       </section>
@@ -72,18 +68,17 @@
           <div class="bar mana-bar" aria-label="灵力值">
             <span class="bar-fill" id="enemyManaFill"></span>
             <span class="bar-label">灵力</span>
-            <span class="bar-value" id="enemyManaText">100 / 100</span>
+            <span class="bar-value" id="enemyManaText">300 / 300</span>
           </div>
           <div class="status-row">
-            <span class="status-chip melee-chip">近战 <b id="enemyMeleeCombo">0</b></span>
-            <span class="status-chip ranged-chip">灵子 <b id="enemyRangedCombo">0</b></span>
-            <span class="status-chip empower-chip" id="enemyEmpower">闪避强化 · 无</span>
-            <span class="status-chip danger-chip" id="enemyExhaust" hidden>灵力枯竭</span>
-            <span class="status-chip calm-chip" id="enemyMeditate" hidden>打坐中</span>
+            <span class="status-chip essence-chip">精魄 <b id="enemyEssenceChip">0</b></span>
           </div>
         </div>
         <div class="fighter-seal" aria-hidden="true">朱</div>
       </section>
+
+      <div class="buff-bar hud-buffs player-buffs" id="playerBuffs" aria-label="云归的增益与减益"></div>
+      <div class="buff-bar hud-buffs enemy-buffs" id="enemyBuffs" aria-label="烬无咎的增益与减益"></div>
     </header>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -106,22 +101,35 @@
           <div class="start-controls" aria-label="操作说明">
             <div class="control-cell"><kbd>W A S D</kbd><span>踏罡移动</span></div>
             <div class="control-cell"><kbd>左键</kbd><span>挥剑近战</span></div>
-            <div class="control-cell"><kbd>右键</kbd><span>御灵飞射</span></div>
+            <div class="control-cell"><kbd>右键</kbd><span>御灵 / 反制</span></div>
             <div class="control-cell"><kbd>空格</kbd><span>贴地闪避</span></div>
-            <div class="control-cell"><kbd>F</kbd><span>打坐回灵</span></div>
-            <div class="control-cell"><kbd>鼠标</kbd><span>剑指方向</span></div>
+            <div class="control-cell"><kbd>F</kbd><span>聚灵凝魄</span></div>
+            <div class="control-cell"><kbd>拖拽</kbd><span>卡牌施放</span></div>
           </div>
 
           <div class="rule-note">
-            <span>气血 200</span><i></i><span>灵力 100</span><i></i><span>灵子前2发免灵</span><i></i><span>拼刀刷新闪避</span><i></i><span>闪避成功清空连击</span><i></i><span>闪避后一击强化</span>
+            <span>气血 200</span><i></i><span>灵力 300</span><i></i><span>精魄为费</span><i></i><span>闪避 2 层</span><i></i><span>拼刀补满闪避</span><i></i><span>近战命中回灵</span>
           </div>
 
           <div class="start-actions">
             <button type="button" class="primary-button" id="startBtn">踏入论剑台</button>
             <button type="button" class="online-button" id="onlineBtn">联机论剑</button>
-            <button type="button" class="ghost-button" id="startSettingsBtn">斗法设置</button>
+            <button type="button" class="ghost-button" id="cardCodexBtn">卡牌仓库</button>
           </div>
           <p class="memory-line" id="startMemory">此局无旧忆，朱衣客尚不知你的招式。</p>
+        </div>
+      </section>
+
+      <section id="cardCodexScreen" class="screen modal-screen" hidden aria-labelledby="codexTitle">
+        <div class="modal-panel codex-panel" role="dialog" aria-modal="true">
+          <div class="panel-ornament" aria-hidden="true"></div>
+          <div class="eyebrow">卡 牌 仓 库</div>
+          <h2 id="codexTitle">目前所有卡牌</h2>
+          <p class="panel-desc" id="codexMeta">共 22 张卡牌，双方共用同一套牌库。</p>
+          <div class="codex-grid" id="cardCodexGrid"></div>
+          <div class="modal-actions">
+            <button type="button" class="ghost-button" id="closeCodexBtn">返回山门</button>
+          </div>
         </div>
       </section>
 
@@ -229,7 +237,7 @@
             <div><span>最高灵子连击</span><b id="resultRanged">3</b></div>
             <div><span>造成伤害</span><b id="resultDamage">200</b></div>
             <div><span>交战时长</span><b id="resultTime">01:24</b></div>
-            <div><span>闪避强化命中</span><b id="resultEmpowered">1</b></div>
+            <div><span>施放卡牌</span><b id="resultEmpowered">0</b></div>
           </div>
 
           <p class="result-memory" id="resultMemory"></p>
@@ -241,46 +249,45 @@
       </section>
     </main>
 
-    <section id="skillbar" class="skillbar" aria-label="技能与冷却">
-      <button type="button" class="skill-button" data-skill="melee" aria-label="挥剑近战，鼠标左键">
-        <span class="skill-glyph">剑</span>
-        <span class="skill-body">
-          <span class="skill-title">挥剑 <kbd>左键</kbd></span>
-          <span class="skill-sub" id="meleeSub">耗灵 5 · 20 伤害</span>
-        </span>
-        <span class="skill-cd" id="meleeCd">就绪</span>
-        <span class="cooldown-sweep" aria-hidden="true"></span>
-      </button>
-      <button type="button" class="skill-button" data-skill="orb" aria-label="发射灵子，鼠标右键">
-        <span class="skill-glyph">灵</span>
-        <span class="skill-body">
-          <span class="skill-title">御灵 <kbd>右键</kbd></span>
-          <span class="skill-sub" id="orbSub">耗灵 5 · 10 伤害</span>
-        </span>
-        <span class="skill-cd" id="orbCd">就绪</span>
-        <span class="cooldown-sweep" aria-hidden="true"></span>
-      </button>
-      <button type="button" class="skill-button" data-skill="dodge" aria-label="闪避，空格键">
-        <span class="skill-glyph">闪</span>
-        <span class="skill-body">
-          <span class="skill-title">闪避 <kbd>空格</kbd></span>
-          <span class="skill-sub" id="dodgeSub">贴地冲刺 · 无敌</span>
-        </span>
-        <span class="skill-cd" id="dodgeCd">就绪</span>
-        <span class="cooldown-sweep" aria-hidden="true"></span>
-      </button>
-      <button type="button" class="skill-button" data-skill="meditate" aria-label="打坐，F 键">
-        <span class="skill-glyph">息</span>
-        <span class="skill-body">
-          <span class="skill-title">打坐 <kbd>F</kbd></span>
-          <span class="skill-sub" id="meditateSub">回灵 20 / 秒</span>
-        </span>
-        <span class="skill-cd" id="meditateCd">就绪</span>
-        <span class="cooldown-sweep" aria-hidden="true"></span>
-      </button>
+    <section id="cardbar" class="cardbar" aria-label="卡牌、闪避与精魄">
+      <div class="quick-panel">
+        <button type="button" class="quick-btn" id="dodgeBtn" aria-label="闪避，空格键">
+          <span class="quick-glyph">闪</span>
+          <span class="quick-body">
+            <span class="quick-title">闪避 <kbd>空格</kbd></span>
+          </span>
+          <span class="quick-cd" id="dodgeCd">就绪</span>
+        </button>
+        <button type="button" class="quick-btn" id="spiritBtn" aria-label="聚灵，F 键">
+          <span class="quick-glyph">聚</span>
+          <span class="quick-body">
+            <span class="quick-title">聚灵 <kbd>F</kbd></span>
+            <span class="quick-sub" id="spiritSub">100 灵力 → 1 精魄</span>
+          </span>
+          <span class="quick-cd" id="spiritCd">就绪</span>
+        </button>
+        <button type="button" class="quick-btn" id="counterBtn" aria-label="反制，右键">
+          <span class="quick-glyph">反</span>
+          <span class="quick-body">
+            <span class="quick-title">反制 <kbd>右键</kbd></span>
+            <span class="quick-sub">对方刀光时按右键</span>
+          </span>
+          <span class="quick-cd" id="counterCd">就绪</span>
+        </button>
+      </div>
+
+      <div class="hand-area">
+        <div class="card-hand" id="cardHand" aria-label="手牌"></div>
+        <div class="hand-tip" id="handTip">拖动卡牌到场中施放 · 精魄即费用 · 1–5 快捷施放</div>
+      </div>
+
+      <div class="essence-panel" aria-label="精魄">
+        <div class="essence-pips" id="essencePips"></div>
+        <div class="essence-readout"><b id="essenceValue">0</b><span>精魄 / 10</span></div>
+      </div>
     </section>
 
-    <div class="field-hint" aria-hidden="true">WASD 移动 · 左键挥剑 · 右键御灵 · 空格闪避 · F 打坐</div>
+    <div class="field-hint" aria-hidden="true">WASD 移动 · 左键挥剑 · 右键御灵（按住连发 / 刀光时反制） · 空格闪避 · F 聚灵 · 拖动卡牌施放</div>
   </div>
 
   <script src="game.js" defer></script>

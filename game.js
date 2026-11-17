@@ -24,26 +24,199 @@
   const STEP = 1 / 60;
   const CONFIG = Object.freeze({
     maxHp: 200,
-    maxMana: 100,
-    meleeDamage: 20,
-    orbDamage: 10,
-    attackBaseCost: 5,
-    orbFreeShots: 2,
-    orbRefreshCombo: 4,
-    moveManaPerSec: 3,
-    exhaustHpPerSec: 5,
-    meditateManaPerSec: 20,
-    meditateCooldown: 5,
+    maxMana: 300,
+    // 基础伤害（不含嗜血等增伤）：近战 10，灵子 5。
+    meleeDamage: 10,
+    orbDamage: 5,
+    // 灵力规则：灵子 5 点，近战不耗灵力（只在命中时回灵）。
+    orbCost: 5,
+    meleeCost: 0,
+    // 被动回灵：移动 20/秒，站定翻倍 40/秒，出招后 0.5 秒内不回。
+    manaRegenMoving: 20,
+    manaRegenIdle: 40,
+    regenPauseAfterAttack: 0.5,
+    // 回灵：灵子命中 +25，近战命中 +60，拼刀 +75（不与近战命中叠加），对波 +60。
+    manaOnOrbHit: 25,
+    manaOnMeleeHit: 60,
+    manaOnMeleeClash: 75,
+    manaOnClash: 60,
+    // 精魄（“费”）：每 6 秒自动 +1，上限 10；聚灵 100 灵力换 1 精魄。
+    essenceMax: 10,
+    essenceInterval: 6,
+    // 桃一局最多使用 3 次。
+    healUsesPerMatch: 3,
+    spiritGatherMana: 100,
+    // 闪避：1 次，2 秒冷却；冲刺距离翻倍。
     dodgeCooldown: 2,
     dodgeDuration: 0.2,
     dodgeInvuln: 0.3,
+    // 近战恢复上一版的 0.38 秒出手间隔（不再有额外 1 秒冷却）。
     meleeCooldown: 0.38,
+    // AI 只能 1 秒挥一剑；满足冷却前若决定近战则原地等待，不发射灵子。
+    aiMeleeAttackInterval: 1,
     orbCooldown: 0.3,
     meleeArc: Math.PI * 0.74,
     meleeDuration: 0.32,
     meleeHitAt: 0.075,
-    orbMaxLife: 3.2,
+    // 反制：对方近战刀光期间按右键，把对方扔出去并眩晕 2 秒。
+    counterRangeScale: 1.5,
+    counterCooldown: 6,
+    counterStunDuration: 2,
+    // 反制成功后 0.5 秒内禁止御灵，避免连点灵子打破自己造成的眩晕。
+    counterOrbLock: 0.5,
+    throwDuration: 0.28,
+    throwSpeed: 950,
+    // 灵子射程延长 50%（寿命 3.2 → 4.8 秒）。
+    orbMaxLife: 4.8,
+    // AI 灵子连击：前 2 发算免灵连发，连射到 4 发后需要近战/换招重置。
+    orbFreeShots: 2,
+    orbRefreshCombo: 4,
+    // 对波吸附：同一直线上的敌方灵子会轻微互相牵引。
+    orbMagnetRadius: 240,
+    orbMagnetTurnRate: 2.6,
+    // 卡牌附加机制
+    swordRadius: 192,
+    stunDuration: 3,
+    rootDuration: 2,
+    rootReward: 2,
+    bloodDuration: 5,
+    // 顺手牵羊+ 的存活时间。
+    stealPlusDuration: 5,
   });
+
+  // 卡组：20 张牌，9 种效果。
+  const CARD_LIBRARY = Object.freeze({
+    greatsword: Object.freeze({
+      id: 'greatsword',
+      name: '巨剑术',
+      cost: 3,
+      tone: '#c8ae74',
+      art: '⚔',
+      text: '拖动到场中，在圆形区域降下巨剑，造成 100 点伤害。',
+      targeting: 'ground',
+      radius: CONFIG.swordRadius,
+      delay: 0.7,
+      damage: 100,
+    }),
+    wind: Object.freeze({
+      id: 'wind',
+      name: '轻身术',
+      cost: 1,
+      tone: '#7fd8c4',
+      art: '🌀',
+      text: '自身移动速度提高 50%，持续 10 秒；可解除自身眩晕。',
+      targeting: 'self',
+      duration: 10,
+      speedBonus: 0.5,
+    }),
+    heal: Object.freeze({
+      id: 'heal',
+      name: '桃',
+      cost: 3,
+      tone: '#e8a0a0',
+      art: '🍑',
+      text: '5 秒内缓慢回复 100 点气血；一局最多使用 3 次。',
+      targeting: 'self',
+      duration: 5,
+      healPerSecond: 20,
+    }),
+    goldfinger: Object.freeze({
+      id: 'goldfinger',
+      name: '金手指',
+      cost: 0,
+      tone: '#e6c86a',
+      art: '☝',
+      text: '替换所有手牌。',
+      targeting: 'self',
+    }),
+    stillness: Object.freeze({
+      id: 'stillness',
+      name: '打坐',
+      cost: 0,
+      tone: '#9fb6d8',
+      art: '☯',
+      text: '入定 2 秒，期间无法移动，结束后获得 2 费。',
+      targeting: 'self',
+      duration: CONFIG.rootDuration,
+    }),
+    blink: Object.freeze({
+      id: 'blink',
+      name: '缩地',
+      cost: 1,
+      tone: '#b7a4e8',
+      art: '⇢',
+      text: '将自身传送到指定位置。',
+      targeting: 'ground',
+    }),
+    blood: Object.freeze({
+      id: 'blood',
+      name: '嗜血奇术',
+      cost: 2,
+      tone: '#d96a6a',
+      art: '血',
+      text: '5 秒内近战与灵子伤害翻倍。',
+      targeting: 'self',
+      duration: CONFIG.bloodDuration,
+    }),
+    hammer: Object.freeze({
+      id: 'hammer',
+      name: '玄武锤',
+      cost: 2,
+      tone: '#8fa3b8',
+      art: '🔨',
+      text: '释放后使对手眩晕 3 秒；受到首次攻击后解除。',
+      targeting: 'self',
+      duration: CONFIG.stunDuration,
+    }),
+    steal: Object.freeze({
+      id: 'steal',
+      name: '顺手牵羊',
+      cost: 1,
+      tone: '#c9a7e8',
+      art: '牵',
+      text: '偷取对手最新获得的一个增益。',
+      targeting: 'self',
+    }),
+    stealPlus: Object.freeze({
+      id: 'stealPlus',
+      name: '顺手牵羊+',
+      cost: 2,
+      tone: '#c9a7e8',
+      art: '牵',
+      text: '偷取对手最新获得的增益。5 秒后销毁并刷新一张牌。',
+      targeting: 'self',
+      temporary: true,
+    }),
+  });
+
+  const CARD_DECK = Object.freeze([
+    'greatsword',
+    'wind',
+    'heal',
+    'goldfinger',
+    'stillness',
+    'blink',
+    'blood',
+    'hammer',
+    'greatsword',
+    'wind',
+    'heal',
+    'goldfinger',
+    'stillness',
+    'blink',
+    'blood',
+    'hammer',
+    'greatsword',
+    'blood',
+    'greatsword',
+    'wind',
+    'steal',
+    'steal',
+  ]);
+  const CARD_HAND_SIZE = 5;
+
+  // AI 与玩家使用同一套牌库（含玄武锤）。
+  const CARD_DECK_AI = Object.freeze(CARD_DECK.slice());
 
   const DEFAULT_SETTINGS = Object.freeze({
     meleeRange: 118,
@@ -150,7 +323,20 @@
   const dom = {
     canvas: $('gameCanvas'),
     hud: $('hud'),
-    skillbar: $('skillbar'),
+    cardbar: $('cardbar'),
+    cardHand: $('cardHand'),
+    handTip: $('handTip'),
+    dodgeBtn: $('dodgeBtn'),
+    dodgeCd: $('dodgeCd'),
+    counterBtn: $('counterBtn'),
+    counterCd: $('counterCd'),
+    spiritBtn: $('spiritBtn'),
+    spiritSub: $('spiritSub'),
+    spiritCd: $('spiritCd'),
+    essencePips: $('essencePips'),
+    essenceValue: $('essenceValue'),
+    playerEssenceChip: $('playerEssenceChip'),
+    enemyEssenceChip: $('enemyEssenceChip'),
     playerPanel: $('playerPanel'),
     enemyPanel: $('enemyPanel'),
     playerName: $('playerName'),
@@ -163,16 +349,8 @@
     enemyHpText: $('enemyHpText'),
     playerManaText: $('playerManaText'),
     enemyManaText: $('enemyManaText'),
-    playerMeleeCombo: $('playerMeleeCombo'),
-    enemyMeleeCombo: $('enemyMeleeCombo'),
-    playerRangedCombo: $('playerRangedCombo'),
-    enemyRangedCombo: $('enemyRangedCombo'),
-    playerEmpower: $('playerEmpower'),
-    enemyEmpower: $('enemyEmpower'),
-    playerExhaust: $('playerExhaust'),
-    enemyExhaust: $('enemyExhaust'),
-    playerMeditate: $('playerMeditate'),
-    enemyMeditate: $('enemyMeditate'),
+    playerBuffs: $('playerBuffs'),
+    enemyBuffs: $('enemyBuffs'),
     playerState: $('playerState'),
     enemyState: $('enemyState'),
     memoryNote: $('memoryNote'),
@@ -181,7 +359,11 @@
     settingsScreen: $('settingsScreen'),
     resultScreen: $('resultScreen'),
     startBtn: $('startBtn'),
-    startSettingsBtn: $('startSettingsBtn'),
+    cardCodexBtn: $('cardCodexBtn'),
+    cardCodexScreen: $('cardCodexScreen'),
+    cardCodexGrid: $('cardCodexGrid'),
+    codexMeta: $('codexMeta'),
+    closeCodexBtn: $('closeCodexBtn'),
     onlineBtn: $('onlineBtn'),
     onlineScreen: $('onlineScreen'),
     onlineSetup: $('onlineSetup'),
@@ -210,15 +392,6 @@
     meleeRangeOutput: $('meleeRangeOutput'),
     orbSpeedOutput: $('orbSpeedOutput'),
     moveSpeedOutput: $('moveSpeedOutput'),
-    meleeSub: $('meleeSub'),
-    orbSub: $('orbSub'),
-    dodgeSub: $('dodgeSub'),
-    meditateSub: $('meditateSub'),
-    meleeCd: $('meleeCd'),
-    orbCd: $('orbCd'),
-    dodgeCd: $('dodgeCd'),
-    meditateCd: $('meditateCd'),
-    skillButtons: {},
     startMemory: $('startMemory'),
     resultSeal: $('resultSeal'),
     resultEyebrow: $('resultEyebrow'),
@@ -232,10 +405,6 @@
     resultEmpowered: $('resultEmpowered'),
     resultMemory: $('resultMemory'),
   };
-
-  document.querySelectorAll('.skill-button').forEach((button) => {
-    dom.skillButtons[button.dataset.skill] = button;
-  });
 
   /* =======================================================================
      02. 状态、存档与场景维度
@@ -261,10 +430,14 @@
 
   const input = {
     keys: new Set(),
+    // 记录移动键按下顺序：同时按住相反方向时，后按下的方向优先。
+    keyTime: Object.create(null),
+    keySerial: 0,
     mouseX: 0,
     mouseY: 0,
     hasMouse: false,
     pointerInside: false,
+    orbHeld: false,
   };
 
   const game = {
@@ -290,6 +463,7 @@
     playerHurtFlash: 0,
     enemyHurtFlash: 0,
     projectilesSerial: 0,
+    buffSerial: 0,
     combatLog: [],
     clashCount: 0,
     lastPlayerAttackAt: -10,
@@ -297,13 +471,17 @@
       playerMeleeAttacks: 0,
       playerRangedAttacks: 0,
       playerDamage: 0,
-      empoweredHits: 0,
+      cardsPlayed: 0,
       maxPlayerMeleeCombo: 0,
       maxPlayerRangedCombo: 0,
       maxEnemyMeleeCombo: 0,
       maxEnemyRangedCombo: 0,
     },
     ai: null,
+    cards: null,
+    enemyCards: null,
+    cardDrag: null,
+    giantSwords: [],
     toastTimer: 0,
     lastWarningAt: -10,
     idleStartPositions: null,
@@ -323,6 +501,8 @@
       lastSnapshotAt: 0,
       lastSnapshotReceivedAt: 0,
       inputSeq: 0,
+      lastOrbActionAt: 0,
+      cardSignature: '',
       connectPromise: null,
       remoteInput: {
         up: false,
@@ -545,7 +725,7 @@
 
   function buildSceneLayout() {
     const hudRect = dom.hud.getBoundingClientRect();
-    const skillRect = dom.skillbar.getBoundingClientRect();
+    const skillRect = dom.cardbar.getBoundingClientRect();
 
     const sidePad = clamp(viewW * 0.026, 9, 34);
     let top = Math.max(72, hudRect.bottom + 11);
@@ -694,34 +874,30 @@
     return game.settings.orbSpeed * world.scale;
   }
 
-  function getMoveSpeed() {
-    return 252 * world.scale * (game.settings.moveSpeedPercent / 100);
+  function getMoveSpeed(fighter) {
+    const boost = fighter && fighter.speedBoostTimer > 0 ? 1.5 : 1;
+    return 252 * world.scale * (game.settings.moveSpeedPercent / 100) * boost;
   }
 
   function getDashSpeed() {
-    return 790 * world.scale;
+    // 闪避距离翻倍：0.2 秒冲刺覆盖原来两倍的距离。
+    return 1580 * world.scale;
   }
 
-  function getMeleeCost(fighter) {
-    if (fighter && fighter.empowered) return 0;
-    return CONFIG.attackBaseCost * Math.pow(2, fighter ? fighter.meleeCombo : 0);
+  function getMeleeCost() {
+    return CONFIG.meleeCost;
   }
 
-  function getOrbCost(fighter) {
-    if (fighter && fighter.empowered) return 0;
-    return getBaseOrbCost(fighter);
+  function getOrbCost() {
+    return CONFIG.orbCost;
   }
 
-  function getBaseMeleeCost(fighter) {
-    return CONFIG.attackBaseCost * Math.pow(2, fighter ? fighter.meleeCombo : 0);
+  function getBaseMeleeCost() {
+    return CONFIG.meleeCost;
   }
 
-  function getBaseOrbCost(fighter) {
-    const combo = fighter ? fighter.rangedCombo : 0;
-    // The first two spirit orbs are free. The third costs 5, then doubles:
-    // 5, 10, 20, 40 ... for every further consecutive orb.
-    if (combo < CONFIG.orbFreeShots) return 0;
-    return CONFIG.attackBaseCost * Math.pow(2, combo - CONFIG.orbFreeShots);
+  function getBaseOrbCost() {
+    return CONFIG.orbCost;
   }
 
   /* =======================================================================
@@ -747,12 +923,13 @@
       maxHp: CONFIG.maxHp,
       mana: CONFIG.maxMana,
       maxMana: CONFIG.maxMana,
+      essence: 0,
+      essenceTimer: 0,
       meleeCombo: 0,
       rangedCombo: 0,
       meleeCooldown: 0,
       orbCooldown: 0,
       dodgeCooldown: 0,
-      meditateCooldown: 0,
       dodgeRemaining: 0,
       dodgeDirX: 0,
       dodgeDirY: 0,
@@ -760,23 +937,43 @@
       bounceDirX: 0,
       bounceDirY: 0,
       bounceSpeed: 0,
+      throwRemaining: 0,
+      throwDirX: 0,
+      throwDirY: 0,
+      throwSpeed: 0,
+      counterCooldown: 0,
+      counterOrbLock: 0,
+      healUses: 0,
       invuln: 0,
       afterimageTimer: 0,
-      empowered: false,
-      meditating: false,
+      regenBlocked: 0,
+      speedBoostTimer: 0,
+      healRemaining: 0,
+      healRate: 0,
+      // 记录每种增益最近一次获得的时间序号，供顺手牵羊固定偷「最新」的增益。
+      buffAppliedAt: { speed: 0, heal: 0, blood: 0 },
+      // 顺手牵羊+：手牌中临时牌的槽位与剩余时间。
+      stealPlusTimers: [],
+      stunRemaining: 0,
+      rootTimer: 0,
+      rootReward: false,
+      meditationTimer: 0,
+      castDuration: 0,
+      damageBoostTimer: 0,
       swing: null,
+      meleeAimAssist: false,
       walkPhase: Math.random() * TAU,
       moving: false,
-      exhausted: false,
-      exhaustTick: 0,
       hitFlash: 0,
       deadTime: 0,
       aiStateLabel: options.team === 'enemy' ? '观势' : '',
       stats: {
+        meleeSwings: 0,
         meleeHits: 0,
         orbHits: 0,
         damageDealt: 0,
-        empoweredHits: 0,
+        cardsPlayed: 0,
+        gathers: 0,
       },
     };
   }
@@ -826,6 +1023,9 @@
     game.effects.length = 0;
     game.floaters.length = 0;
     game.afterimages.length = 0;
+    game.giantSwords = [];
+    game.cardDrag = null;
+    initCards();
     game.shake = 0;
     game.playerHurtFlash = 0;
     game.enemyHurtFlash = 0;
@@ -836,6 +1036,7 @@
     game.winner = null;
     game.recorded = false;
     game.projectilesSerial = 0;
+    game.buffSerial = 0;
     game.combatLog = [];
     game.clashCount = 0;
     game.lastWarningAt = -10;
@@ -844,7 +1045,7 @@
       playerMeleeAttacks: 0,
       playerRangedAttacks: 0,
       playerDamage: 0,
-      empoweredHits: 0,
+      cardsPlayed: 0,
       maxPlayerMeleeCombo: 0,
       maxPlayerRangedCombo: 0,
       maxEnemyMeleeCombo: 0,
@@ -864,7 +1065,9 @@
 
   function startBattle() {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    input.orbHeld = false;
     closeSettings(false, true);
+    closeCardCodex();
     resetMatch();
     game.mode = 'battle';
     setBodyMode('battle');
@@ -911,22 +1114,48 @@
     game.player.y = spawn.player.y;
     game.player.hp = CONFIG.maxHp;
     game.player.mana = CONFIG.maxMana;
-    game.player.meditating = false;
+    game.player.essence = 0;
+    game.player.essenceTimer = 0;
+    game.player.dodgeCooldown = 0;
     game.player.swing = null;
     game.player.dodgeRemaining = 0;
+    game.player.throwRemaining = 0;
+    game.player.counterCooldown = 0;
+    game.player.counterOrbLock = 0;
+    game.player.buffAppliedAt = { speed: 0, heal: 0, blood: 0 };
+    game.player.stealPlusTimers = [];
+    game.player.healUses = 0;
+    game.player.rootTimer = 0;
+    game.player.rootReward = false;
+    game.player.meditationTimer = 0;
+    game.player.castDuration = 0;
     game.enemy.x = spawn.enemy.x;
     game.enemy.y = spawn.enemy.y;
     game.enemy.hp = CONFIG.maxHp;
     game.enemy.mana = CONFIG.maxMana;
-    game.enemy.meditating = false;
+    game.enemy.essence = 0;
+    game.enemy.essenceTimer = 0;
+    game.enemy.dodgeCooldown = 0;
     game.enemy.swing = null;
     game.enemy.dodgeRemaining = 0;
+    game.enemy.throwRemaining = 0;
+    game.enemy.counterCooldown = 0;
+    game.enemy.counterOrbLock = 0;
+    game.enemy.buffAppliedAt = { speed: 0, heal: 0, blood: 0 };
+    game.enemy.stealPlusTimers = [];
+    game.enemy.healUses = 0;
+    game.enemy.rootTimer = 0;
+    game.enemy.rootReward = false;
+    game.enemy.meditationTimer = 0;
+    game.enemy.castDuration = 0;
     game.enemy.aimAngle = Math.atan2(game.player.y - game.enemy.y, game.player.x - game.enemy.x);
     game.player.aimAngle = Math.atan2(game.enemy.y - game.player.y, game.enemy.x - game.player.x);
     game.projectiles.length = 0;
     game.effects.length = 0;
     game.floaters.length = 0;
     game.afterimages.length = 0;
+    game.giantSwords = [];
+    game.cardDrag = null;
     game.endPending = false;
     game.endTimer = 0;
     game.battleTime = 0;
@@ -936,6 +1165,30 @@
   }
 
   function canAct(fighter) {
+    return Boolean(
+      fighter &&
+      fighter.hp > 0 &&
+      fighter.stunRemaining <= 0 &&
+      game.mode === 'battle' &&
+      !game.paused &&
+      !game.endPending &&
+      !game.settingsOpen
+    );
+  }
+
+  // 出牌与聚灵不受眩晕限制（眩晕时也可以放牌/聚灵）。
+  function canUseCards(fighter) {
+    return Boolean(
+      fighter &&
+      fighter.hp > 0 &&
+      game.mode === 'battle' &&
+      !game.paused &&
+      !game.endPending &&
+      !game.settingsOpen
+    );
+  }
+
+  function canGather(fighter) {
     return Boolean(
       fighter &&
       fighter.hp > 0 &&
@@ -950,62 +1203,73 @@
     return cost <= fighter.mana + 0.0001;
   }
 
-  function stopMeditation(fighter) {
-    if (!fighter || !fighter.meditating) return;
-    fighter.meditating = false;
-    fighter.meditateCooldown = Math.max(0, fighter.meditateCooldown);
-    if (fighter === game.enemy) fighter.aiStateLabel = '出定';
-  }
-
-  function startMeditation(fighter) {
-    if (!canAct(fighter) || fighter.meditating || fighter.dodgeRemaining > 0) return false;
-    if (fighter.meditateCooldown > 0) {
-      if (fighter === game.player) showToast(`打坐尚未调息妥当 · ${fighter.meditateCooldown.toFixed(1)} 秒`, 'warn', 1300);
+  // 聚灵：把 100 点灵力凝成 1 点精魄，无冷却；眩晕期间也可以使用。
+  function castSpiritGather(fighter) {
+    if (!fighter || !canGather(fighter)) return false;
+    if (fighter.essence >= CONFIG.essenceMax) {
+      if (fighter === game.player) warnPlayer('精魄已满', true);
       return false;
     }
-    fighter.meditating = true;
-    fighter.meditateCooldown = CONFIG.meditateCooldown;
-    fighter.swing = null;
-    if (fighter === game.enemy) fighter.aiStateLabel = '入定';
-    spawnRipple(fighter.x, fighter.y, fighter.palette.trim, 0.4, fighter.radius * 1.7);
+    if (fighter.mana < CONFIG.spiritGatherMana) {
+      if (fighter === game.player) {
+        warnPlayer(
+          `灵力不足 · 聚灵需 ${CONFIG.spiritGatherMana} 灵力（当前 ${Math.floor(fighter.mana)}）`,
+          true
+        );
+      }
+      return false;
+    }
+    fighter.mana -= CONFIG.spiritGatherMana;
+    fighter.essence = Math.min(CONFIG.essenceMax, fighter.essence + 1);
+    if (fighter.stats) fighter.stats.gathers += 1;
+    fighter.regenBlocked = CONFIG.regenPauseAfterAttack;
+    spawnRipple(fighter.x, fighter.y, '#d9c48a', 0.5, fighter.radius * 2.2);
+    spawnRipple(fighter.x, fighter.y, '#fff0c4', 0.3, fighter.radius * 1.2);
+    spawnFloater(fighter.x, fighter.y - 58 * world.scale, '+1 精魄', '#ffe6a8', 0.9, 15);
+    game.combatLog.push({
+      team: fighter.team,
+      type: 'gather',
+      time: Number(game.battleTime.toFixed(2)),
+      meleeCombo: fighter.meleeCombo,
+      rangedCombo: fighter.rangedCombo,
+    });
+    if (game.combatLog.length > 30) game.combatLog.shift();
     return true;
-  }
-
-  function toggleMeditation(fighter) {
-    // The meditation key only enters meditation. While already meditating it
-    // deliberately does nothing; movement, attacks, dodges or taking a hit
-    // are what break the trance.
-    if (!fighter || fighter.meditating) return false;
-    return startMeditation(fighter);
   }
 
   function tryMelee(fighter, angle) {
     if (!canAct(fighter)) return false;
     if (fighter.meleeCooldown > 0) return false;
+    if (
+      fighter === game.enemy &&
+      game.ai &&
+      Number.isFinite(game.ai.lastMeleeAt) &&
+      game.battleTime - game.ai.lastMeleeAt < CONFIG.aiMeleeAttackInterval
+    ) {
+      return false;
+    }
     const cost = getMeleeCost(fighter);
     if (!canSpend(fighter, cost)) {
       if (fighter === game.player) {
-        const baseCost = getBaseMeleeCost(fighter);
-        warnPlayer(`灵力不足 · 挥剑需 ${Math.ceil(baseCost)} 灵力，可改换灵子或打坐`, true);
+        warnPlayer(`灵力不足 · 挥剑需 ${cost} 灵力（当前 ${Math.floor(fighter.mana)}）`, true);
       }
       return false;
     }
 
-    stopMeditation(fighter);
-    const wasEmpowered = fighter.empowered;
+    fighter.meditationTimer = 0;
+    fighter.mana = Math.max(0, fighter.mana - cost);
+    fighter.regenBlocked = CONFIG.regenPauseAfterAttack;
     game.combatLog.push({
       team: fighter.team,
       type: 'melee',
       time: Number(game.battleTime.toFixed(2)),
       meleeCombo: fighter.meleeCombo,
       rangedCombo: fighter.rangedCombo,
-      empowered: wasEmpowered,
     });
     if (game.combatLog.length > 30) game.combatLog.shift();
-    fighter.mana = Math.max(0, fighter.mana - cost);
-    fighter.empowered = false;
     fighter.meleeCombo += 1;
     fighter.rangedCombo = 0;
+    if (fighter.stats) fighter.stats.meleeSwings += 1;
     fighter.meleeCooldown = CONFIG.meleeCooldown;
     fighter.facing = angle;
     fighter.aimAngle = angle;
@@ -1016,9 +1280,10 @@
       resolved: false,
       startAngle: angle - CONFIG.meleeArc / 2,
       endAngle: angle + CONFIG.meleeArc / 2,
-      empowered: wasEmpowered,
+      empowered: false,
       targetAngle: angle,
       clashed: false,
+      autoAim: Boolean(fighter.meleeAimAssist),
     };
     fighter.walkPhase += 0.35;
     if (fighter === game.player) {
@@ -1027,37 +1292,46 @@
       game.lastPlayerAttackAt = game.battleTime;
     } else {
       game.match.maxEnemyMeleeCombo = Math.max(game.match.maxEnemyMeleeCombo, fighter.meleeCombo);
-      game.aiStateLabel = wasEmpowered ? '强化近战' : '挥剑';
+      game.aiStateLabel = '挥剑';
+      if (game.ai) {
+        game.ai.lastAttackAt = game.battleTime;
+        game.ai.lastMeleeAt = game.battleTime;
+        game.ai.meleeWaitUntil = 0;
+      }
     }
     spawnSwordWind(fighter, angle);
+    fighter.meleeAimAssist = false;
     return true;
   }
 
   function tryOrb(fighter, angle) {
     if (!canAct(fighter)) return false;
+    // 近战刀光期间不能同时发射灵子。
+    if (fighter.swing) return false;
+    if (fighter.counterOrbLock > 0) {
+      if (fighter === game.player) warnPlayer('反制后 0.5 秒内无法御灵');
+      return false;
+    }
     if (fighter.orbCooldown > 0) return false;
     const cost = getOrbCost(fighter);
     if (!canSpend(fighter, cost)) {
       if (fighter === game.player) {
-        const baseCost = getBaseOrbCost(fighter);
-        warnPlayer(`灵力不足 · 下一发灵子需 ${Math.ceil(baseCost)} 灵力，近战可重置灵子连击`, true);
+        warnPlayer(`灵力不足 · 御灵需 ${cost} 灵力`, true);
       }
       return false;
     }
 
-    stopMeditation(fighter);
-    const wasEmpowered = fighter.empowered;
+    fighter.meditationTimer = 0;
+    fighter.regenBlocked = CONFIG.regenPauseAfterAttack;
     game.combatLog.push({
       team: fighter.team,
       type: 'orb',
       time: Number(game.battleTime.toFixed(2)),
       meleeCombo: fighter.meleeCombo,
       rangedCombo: fighter.rangedCombo,
-      empowered: wasEmpowered,
     });
     if (game.combatLog.length > 30) game.combatLog.shift();
     fighter.mana = Math.max(0, fighter.mana - cost);
-    fighter.empowered = false;
     fighter.rangedCombo += 1;
     fighter.meleeCombo = 0;
     fighter.orbCooldown = CONFIG.orbCooldown;
@@ -1067,6 +1341,7 @@
     const direction = { x: Math.cos(angle), y: Math.sin(angle) };
     const spawnDistance = fighter.radius + 16 * world.scale;
     const initialSpeed = getOrbInitialSpeed();
+    const damage = CONFIG.orbDamage * (fighter.damageBoostTimer > 0 ? 2 : 1);
     const projectile = {
       x: fighter.x + direction.x * spawnDistance,
       y: fighter.y + direction.y * spawnDistance,
@@ -1081,8 +1356,7 @@
       radius: Math.max(3.2, 3.9 * world.scale),
       owner: fighter.team,
       ownerRef: fighter,
-      damage: wasEmpowered ? CONFIG.orbDamage * 2 : CONFIG.orbDamage,
-      empowered: wasEmpowered,
+      damage,
       color: fighter.palette.spirit,
       softColor: fighter.palette.spiritSoft,
       serial: ++game.projectilesSerial,
@@ -1100,7 +1374,7 @@
       game.lastPlayerAttackAt = game.battleTime;
     } else {
       game.match.maxEnemyRangedCombo = Math.max(game.match.maxEnemyRangedCombo, fighter.rangedCombo);
-      game.aiStateLabel = wasEmpowered ? '强化御灵' : '御灵';
+      game.aiStateLabel = '御灵';
     }
     return true;
   }
@@ -1109,7 +1383,7 @@
     if (!canAct(fighter)) return false;
     if (fighter.dodgeCooldown > 0 || fighter.dodgeRemaining > 0) return false;
 
-    stopMeditation(fighter);
+    fighter.meditationTimer = 0;
     const direction = { x: Math.cos(directionAngle), y: Math.sin(directionAngle) };
     game.combatLog.push({
       team: fighter.team,
@@ -1117,16 +1391,14 @@
       time: Number(game.battleTime.toFixed(2)),
       meleeCombo: fighter.meleeCombo,
       rangedCombo: fighter.rangedCombo,
-      empowered: true,
     });
     if (game.combatLog.length > 30) game.combatLog.shift();
+    fighter.dodgeCooldown = CONFIG.dodgeCooldown;
     fighter.dodgeDirX = direction.x;
     fighter.dodgeDirY = direction.y;
     fighter.dodgeRemaining = CONFIG.dodgeDuration;
     fighter.invuln = CONFIG.dodgeInvuln;
-    fighter.dodgeCooldown = CONFIG.dodgeCooldown;
     fighter.afterimageTimer = 0;
-    fighter.empowered = true;
     fighter.facing = directionAngle;
     fighter.aimAngle = directionAngle;
     if (fighter !== game.player) {
@@ -1223,6 +1495,86 @@
     return true;
   }
 
+  // 反制后的抛掷位移：被扔出去的战士沿固定方向飞一段距离。
+  function updateThrow(fighter, dt) {
+    if (!fighter || fighter.hp <= 0 || fighter.throwRemaining <= 0) return false;
+    const step = Math.min(dt, fighter.throwRemaining);
+    const moved = moveFighter(
+      fighter,
+      fighter.throwDirX * fighter.throwSpeed * step,
+      fighter.throwDirY * fighter.throwSpeed * step
+    );
+    fighter.throwRemaining = Math.max(0, fighter.throwRemaining - step);
+    fighter.moving = moved > 0.02;
+    fighter.afterimageTimer -= dt;
+    if (fighter.afterimageTimer <= 0) {
+      fighter.afterimageTimer = 0.04;
+      addAfterimage(fighter);
+    }
+    if (fighter.throwRemaining <= 0) {
+      spawnDust(fighter.x, fighter.y, 6, fighter.palette.robeLight);
+    }
+    return true;
+  }
+
+  // 施加眩晕：会打断打坐，并让这一次打坐拿不到精魄。
+  function applyStun(fighter, seconds) {
+    if (!fighter || fighter.hp <= 0) return;
+    if (fighter.rootTimer > 0) {
+      fighter.rootTimer = 0;
+      fighter.rootReward = false;
+      fighter.meditationTimer = 0;
+      spawnFloater(fighter.x, fighter.y - 74 * world.scale, '打坐被打断', '#ffb0a1', 0.9, 14);
+      if (fighter === game.player) {
+        showToast('打坐被打断，本次无法获得精魄', 'warn', 1300);
+      }
+    }
+    fighter.stunRemaining = Math.max(fighter.stunRemaining, seconds);
+  }
+
+  // 反制：对方近战刀光出现期间按右键，打断并把他扔出去。
+  function tryCounter(defender) {
+    const opponent = defender === game.player ? game.enemy : game.player;
+    if (!opponent || opponent.hp <= 0 || !defender || defender.hp <= 0) return false;
+    if (!canAct(defender) || defender.counterCooldown > 0 || defender.throwRemaining > 0) return false;
+    if (defender.swing) return false;
+    const swing = opponent.swing;
+    if (!swing || swing.clashed) return false;
+    const distance = dist(defender.x, defender.y, opponent.x, opponent.y);
+    if (distance > getMeleeReach(opponent) * CONFIG.counterRangeScale + defender.radius + opponent.radius * 0.5) {
+      return false;
+    }
+
+    opponent.swing = null;
+    opponent.meleeCooldown = Math.max(opponent.meleeCooldown, CONFIG.meleeCooldown);
+    opponent.meditationTimer = 0;
+    const away = Math.atan2(opponent.y - defender.y, opponent.x - defender.x);
+    opponent.throwRemaining = CONFIG.throwDuration;
+    opponent.throwDirX = Math.cos(away);
+    opponent.throwDirY = Math.sin(away);
+    opponent.throwSpeed = CONFIG.throwSpeed * world.scale;
+    // 反制会眩晕被扔出去的人；受到首次攻击后解除（damageFighter 负责）。
+    applyStun(opponent, CONFIG.counterStunDuration);
+    defender.counterCooldown = CONFIG.counterCooldown;
+    defender.counterOrbLock = CONFIG.counterOrbLock;
+    defender.facing = -away;
+    defender.aimAngle = -away;
+
+    game.shake = Math.max(game.shake, 7);
+    spawnRipple(defender.x, defender.y, '#ffe7ae', 0.4, defender.radius * 2);
+    spawnRipple(opponent.x, opponent.y, '#ffd8a0', 0.34, opponent.radius * 1.6);
+    spawnFloater(opponent.x, opponent.y - 56 * world.scale, '反制', '#ffe7ae', 0.9, 16);
+    game.combatLog.push({
+      team: defender.team,
+      type: 'counter',
+      time: Number(game.battleTime.toFixed(2)),
+      meleeCombo: defender.meleeCombo,
+      rangedCombo: defender.rangedCombo,
+    });
+    if (game.combatLog.length > 30) game.combatLog.shift();
+    return true;
+  }
+
   function handleDodgeSuccess(fighter, attacker, kind) {
     if (!fighter) return;
     const hadCombo = fighter.meleeCombo > 0 || fighter.rangedCombo > 0;
@@ -1235,7 +1587,6 @@
       time: Number(game.battleTime.toFixed(2)),
       meleeCombo: 0,
       rangedCombo: 0,
-      empowered: fighter.empowered,
     });
     if (game.combatLog.length > 30) game.combatLog.shift();
     if (hadCombo) {
@@ -1249,92 +1600,65 @@
   }
 
   function resolveMeleeSwing(fighter, swing) {
+    // 拼刀：双方都不会受到这次近战伤害。
+    if (swing.clashed) return;
     const opponent = fighter === game.player ? game.enemy : game.player;
-    if (!opponent || opponent.hp <= 0) {
-      parryProjectiles(fighter, swing);
-      return;
-    }
+    if (!opponent || opponent.hp <= 0) return;
 
     const reach = getMeleeReach(fighter);
     const distance = dist(fighter.x, fighter.y, opponent.x, opponent.y);
     const angleToOpponent = Math.atan2(opponent.y - fighter.y, opponent.x - fighter.x);
     const withinArc = Math.abs(angleDiff(angleToOpponent, swing.targetAngle)) <= CONFIG.meleeArc / 2 + 0.12;
-    const withinRange = distance <= reach + opponent.radius * 0.62;
+    const withinRange =
+      distance <=
+      reach + opponent.radius * 0.62 + (swing.autoAim ? 18 * world.scale : 0);
     const lineClear = !lineBlockedByObstacle(fighter.x, fighter.y, opponent.x, opponent.y, 1.5 * world.scale);
 
     if (withinArc && withinRange && lineClear) {
       if (opponent.invuln > 0) {
         handleDodgeSuccess(opponent, fighter, 'melee');
       } else {
-        const damage = swing.empowered ? CONFIG.meleeDamage * 2 : CONFIG.meleeDamage;
+        const damage = CONFIG.meleeDamage * (fighter.damageBoostTimer > 0 ? 2 : 1);
         const didHit = damageFighter(opponent, damage, {
           source: 'melee',
           attacker: fighter,
-          empowered: swing.empowered,
           showText: true,
         });
         if (didHit) {
           fighter.stats.meleeHits += 1;
-          if (swing.empowered) fighter.stats.empoweredHits += 1;
           fighter.stats.damageDealt += damage;
           if (fighter === game.player) {
             game.match.playerDamage += damage;
-            if (swing.empowered) game.match.empoweredHits += 1;
           }
-          game.shake = Math.max(game.shake, swing.empowered ? 10 : 7);
-          spawnMeleeHit(opponent.x, opponent.y - 20 * world.scale, fighter.palette, swing.empowered);
-          playMeleeImpact(swing.empowered);
+          // 近战命中：攻击者回复 60 点灵力（未命中不回复）。
+          restoreMana(fighter, CONFIG.manaOnMeleeHit);
+          game.shake = Math.max(game.shake, 7);
+          spawnMeleeHit(opponent.x, opponent.y - 20 * world.scale, fighter.palette, false);
+          playMeleeImpact(false);
           fighter.facing = angleToOpponent;
         }
       }
-    }
-    parryProjectiles(fighter, swing);
-  }
-
-  function tryParryProjectile(fighter, projectile, swing) {
-    if (!fighter || !projectile || !swing || projectile.dead || projectile.owner === fighter.team) return false;
-    const reach = getMeleeReach(fighter) * 1.08;
-    const d = dist(fighter.x, fighter.y, projectile.x, projectile.y);
-    if (d > reach) return false;
-    const angleToProjectile = Math.atan2(projectile.y - fighter.y, projectile.x - fighter.x);
-    if (Math.abs(angleDiff(angleToProjectile, swing.targetAngle)) > CONFIG.meleeArc / 2 + 0.2) return false;
-    if (lineBlockedByObstacle(fighter.x, fighter.y, projectile.x, projectile.y, 0)) return false;
-    projectile.dead = true;
-    game.combatLog.push({
-      team: fighter.team,
-      type: 'parry',
-      time: Number(game.battleTime.toFixed(2)),
-      meleeCombo: fighter.meleeCombo,
-      rangedCombo: fighter.rangedCombo,
-      empowered: swing.empowered,
-    });
-    if (game.combatLog.length > 30) game.combatLog.shift();
-    spawnParryBurst(projectile.x, projectile.y, fighter.palette);
-    spawnFloater(projectile.x, projectile.y - 18 * world.scale, '破', fighter.palette.trim, 0.7, 14);
-    return true;
-  }
-
-  function parryProjectiles(fighter, swing) {
-    for (const projectile of game.projectiles) {
-      tryParryProjectile(fighter, projectile, swing);
     }
   }
 
   function damageFighter(target, amount, options = {}) {
     if (!target || target.hp <= 0 || game.endPending) return false;
     const source = options.source || 'unknown';
-    const isAttack = source === 'melee' || source === 'orb';
+    const isAttack = source === 'melee' || source === 'orb' || source === 'sword';
     if (isAttack && target.invuln > 0) return false;
 
     const actualDamage = Math.max(0, amount);
     target.hp = Math.max(0, target.hp - actualDamage);
     target.hitFlash = source === 'exhaust' ? 0.12 : 0.22;
 
-    if (source !== 'exhaust') {
-      stopMeditation(target);
-      if (options.attacker) {
-        spawnInkSplash(target.x, target.y - 20 * world.scale, options.attacker.palette);
-      }
+    // 玄武锤的眩晕：受到首次攻击伤害后立即解除。
+    if (isAttack && target.stunRemaining > 0) {
+      target.stunRemaining = 0;
+      spawnFloater(target.x, target.y - 74 * world.scale, '解晕', '#ffe6a8', 0.7, 13);
+    }
+
+    if (source !== 'exhaust' && options.attacker) {
+      spawnInkSplash(target.x, target.y - 20 * world.scale, options.attacker.palette);
     }
 
     if (target === game.player) {
@@ -1383,8 +1707,6 @@
     game.endTimer = 1.05;
     game.winner = winner;
     game.enemy.aiStateLabel = loser === game.enemy ? '败势' : '收势';
-    stopMeditation(game.player);
-    stopMeditation(game.enemy);
     game.player.swing = null;
     game.enemy.swing = null;
     game.shake = Math.max(game.shake, 12);
@@ -1443,15 +1765,15 @@
     const localDamage = isOnlineGuest()
       ? game.enemy.stats.damageDealt
       : game.match.playerDamage;
-    const localEmpowered = isOnlineGuest()
-      ? game.enemy.stats.empoweredHits
-      : game.match.empoweredHits;
+    const localCards = isOnlineGuest()
+      ? game.enemy.stats.cardsPlayed || 0
+      : game.match.cardsPlayed;
     setText(dom.resultHp, `${Math.ceil(localFighter.hp)}`);
     setText(dom.resultMelee, `${localMaxMelee}`);
     setText(dom.resultRanged, `${localMaxRanged}`);
     setText(dom.resultDamage, `${localDamage}`);
     setText(dom.resultTime, formatTime(game.battleTime));
-    setText(dom.resultEmpowered, `${localEmpowered}`);
+    setText(dom.resultEmpowered, `${localCards}`);
     if (game.online.active) {
       setText(dom.resultMemory, `联机论剑 · 房间 ${game.online.code || ''} · 此局已入江湖。`);
       setText(dom.backToStartBtn, '离开房间');
@@ -1575,6 +1897,8 @@
     const playerSwing = player.swing;
     const enemySwing = enemy.swing;
     if (!playerSwing || !enemySwing || playerSwing.clashed || enemySwing.clashed) return;
+    // 只有双方剑都还没落下时才算拼刀；已经命中过的残影不再参与。
+    if (playerSwing.resolved || enemySwing.resolved) return;
     playerSwing.clashed = true;
     enemySwing.clashed = true;
     triggerMeleeClash(player, enemy);
@@ -1582,8 +1906,13 @@
 
   function triggerMeleeClash(player, enemy) {
     game.clashCount += 1;
+    // 拼刀：双方闪避立即转好、近战冷却立即刷新，并各回复灵力。
     player.dodgeCooldown = 0;
     enemy.dodgeCooldown = 0;
+    player.meleeCooldown = 0;
+    enemy.meleeCooldown = 0;
+    restoreMana(player, CONFIG.manaOnMeleeClash);
+    restoreMana(enemy, CONFIG.manaOnMeleeClash);
     game.shake = Math.max(game.shake, 15);
     const x = (player.x + enemy.x) / 2;
     const y = (player.y + enemy.y) / 2 - 16 * world.scale;
@@ -1600,7 +1929,7 @@
     });
     if (game.combatLog.length > 30) game.combatLog.shift();
     playClashSound();
-    showToast('拼刀 · 双方闪避已刷新', '', 1050);
+    showToast('拼刀 · 闪避已刷新', '', 1050);
   }
 
   function spawnClashSparks(x, y) {
@@ -1718,20 +2047,19 @@
     const didHit = damageFighter(target, projectile.damage, {
       source: 'orb',
       attacker: projectile.ownerRef,
-      empowered: projectile.empowered,
       showText: true,
     });
     if (!didHit) return;
     projectile.dead = true;
     projectile.ownerRef.stats.orbHits += 1;
-    if (projectile.empowered) projectile.ownerRef.stats.empoweredHits += 1;
     projectile.ownerRef.stats.damageDealt += projectile.damage;
     if (projectile.ownerRef === game.player) {
       game.match.playerDamage += projectile.damage;
-      if (projectile.empowered) game.match.empoweredHits += 1;
     }
-    game.shake = Math.max(game.shake, projectile.empowered ? 7 : 4);
-    spawnSpiritBurst(projectile.x, projectile.y, projectile.color, projectile.empowered ? 20 : 12, 110 * world.scale);
+    // 灵子命中：发射者回复 25 点灵力（闪避/未命中不回复）。
+    restoreMana(projectile.ownerRef, CONFIG.manaOnOrbHit);
+    game.shake = Math.max(game.shake, 4);
+    spawnSpiritBurst(projectile.x, projectile.y, projectile.color, 12, 110 * world.scale);
     spawnInkSplash(target.x, target.y - 22 * world.scale, target.palette, 7);
   }
 
@@ -1771,6 +2099,28 @@
         continue;
       }
 
+      // 对波吸附：附近有敌方灵子相向而行时，轻微牵引弹道，提高对波概率。
+      for (const other of game.projectiles) {
+        if (other === projectile || other.dead || other.owner === projectile.owner) continue;
+        const dx = other.x - projectile.x;
+        const dy = other.y - projectile.y;
+        const gap = Math.hypot(dx, dy);
+        if (gap > CONFIG.orbMagnetRadius * world.scale || gap < 1) continue;
+        const toOther = Math.atan2(dy, dx);
+        const current = Math.atan2(projectile.vy, projectile.vx);
+        if (Math.cos(toOther - current) < 0.2) continue;
+        const otherTravel = Math.atan2(other.vy, other.vx);
+        const otherToThis = Math.atan2(-dy, -dx);
+        if (Math.cos(otherTravel - otherToThis) < 0.2) continue;
+        const maxTurn = CONFIG.orbMagnetTurnRate * dt;
+        const diff = Math.atan2(Math.sin(toOther - current), Math.cos(toOther - current));
+        const turn = clamp(diff, -maxTurn, maxTurn);
+        const speed = Math.hypot(projectile.vx, projectile.vy) || 1;
+        projectile.vx = Math.cos(current + turn) * speed;
+        projectile.vy = Math.sin(current + turn) * speed;
+        break;
+      }
+
       projectile.speed = Math.min(projectile.maxSpeed, projectile.speed + projectile.accel * dt);
       const direction = norm(projectile.vx, projectile.vy);
       projectile.vx = direction.x * projectile.speed;
@@ -1803,10 +2153,6 @@
         if (target && target.hp > 0) {
           const hitDistance = dist(projectile.x, projectile.y, target.x, target.y);
           if (hitDistance < target.radius + projectile.radius) {
-            if (target.swing && tryParryProjectile(target, projectile, target.swing)) {
-              removed = true;
-              break;
-            }
             if (target.invuln > 0) {
               // The invulnerable dash passes through the spirit orb without
               // healing or restoring mana, but a clean dodge breaks both of
@@ -1827,28 +2173,31 @@
       }
     }
 
-    // Opposing orbs annihilate. The later launch refunds its full mana cost
-    // and then gains an additional 10 spirit.
+    // Opposing orbs annihilate. The later launch gains a flat 60 spirit (对波).
+    // Use swept segments so fast orbs cannot tunnel through each other.
     for (let i = 0; i < game.projectiles.length; i += 1) {
       const a = game.projectiles[i];
       if (a.dead) continue;
       for (let j = i + 1; j < game.projectiles.length; j += 1) {
         const b = game.projectiles[j];
         if (b.dead || a.owner === b.owner) continue;
-        if (dist(a.x, a.y, b.x, b.y) <= a.radius + b.radius + 2 * world.scale) {
+        const reach = a.radius + b.radius + 2 * world.scale;
+        const gap = Math.min(
+          pointToSegmentDistance(a.x, a.y, b.prevX, b.prevY, b.x, b.y),
+          pointToSegmentDistance(b.x, b.y, a.prevX, a.prevY, a.x, a.y)
+        );
+        if (gap <= reach) {
           const later = a.serial > b.serial ? a : b;
           const laterOwner = later.ownerRef;
-          const spent = Number.isFinite(later.manaCost) ? later.manaCost : 0;
-          const reward = spent + 10;
           spawnSpiritBurst((a.x + b.x) / 2, (a.y + b.y) / 2, '#d9ecff', 18, 120 * world.scale);
           spawnRipple((a.x + b.x) / 2, (a.y + b.y) / 2, '#cfe8ff', 0.34, 18 * world.scale);
           destroyProjectile(a, false);
           destroyProjectile(b, false);
-          restoreMana(laterOwner, reward);
+          restoreMana(laterOwner, CONFIG.manaOnClash);
           showToast(
             laterOwner === game.player
-              ? `对波成功 · 返还 ${spent} 灵力，再得 10 灵力`
-              : `朱衣客对波成功 · 返还 ${spent}，再得 10 灵力`,
+              ? `对波成功 · 得 ${CONFIG.manaOnClash} 灵力`
+              : `朱衣客对波成功 · 得 ${CONFIG.manaOnClash} 灵力`,
             '',
             1250
           );
@@ -2302,21 +2651,50 @@
     return game.player ? game.player.aimAngle : 0;
   }
 
+  // 近战索敌：对手已经落在可命中的近战范围内时，剑锋自动指向对手，
+  // 不再要求鼠标精确对准。命中判定仍会单独检查掩体。
+  function getMeleeAimAngleFor(fighter, baseAngle) {
+    const opponent = otherFighter(fighter);
+    if (!fighter || !opponent || opponent.hp <= 0) return baseAngle;
+    const distance = dist(fighter.x, fighter.y, opponent.x, opponent.y);
+    if (distance > getMeleeReach(fighter) + opponent.radius * 0.62) {
+      fighter.meleeAimAssist = false;
+      return baseAngle;
+    }
+    fighter.meleeAimAssist = true;
+    return Math.atan2(opponent.y - fighter.y, opponent.x - fighter.x);
+  }
+
+  function getPlayerMeleeAngle(baseAngle) {
+    return getMeleeAimAngleFor(game.player, baseAngle);
+  }
+
+  function onlineMeleeAimAngle(fighter, baseAngle) {
+    return getMeleeAimAngleFor(fighter, baseAngle);
+  }
+
   function playerMelee(autoAim = false) {
     if (isOnlineGuest()) {
       sendGuestAction('melee', getGuestAimAngle(autoAim));
       return;
     }
     if (!canAct(game.player)) return;
-    tryMelee(game.player, getPlayerAimAngle(autoAim));
+    tryMelee(game.player, getPlayerMeleeAngle(getPlayerAimAngle(autoAim)));
   }
 
   function playerOrb(autoAim = false) {
     if (isOnlineGuest()) {
+      game.online.lastOrbActionAt = performance.now();
       sendGuestAction('orb', getGuestAimAngle(autoAim));
       return;
     }
     if (!canAct(game.player)) return;
+    // 对方刀光期间按右键 = 反制，不发射灵子。
+    if (tryCounter(game.player)) {
+      // 反制这一下不算御灵起手，避免按住右键在锁定结束后自动续射。
+      input.orbHeld = false;
+      return;
+    }
     tryOrb(game.player, getPlayerAimAngle(autoAim));
   }
 
@@ -2333,12 +2711,9 @@
       return;
     }
     if (!canAct(game.player)) return;
-    let dx = 0;
-    let dy = 0;
-    if (input.keys.has('KeyW') || input.keys.has('ArrowUp')) dy -= 1;
-    if (input.keys.has('KeyS') || input.keys.has('ArrowDown')) dy += 1;
-    if (input.keys.has('KeyA') || input.keys.has('ArrowLeft')) dx -= 1;
-    if (input.keys.has('KeyD') || input.keys.has('ArrowRight')) dx += 1;
+    const move = readMovementInput();
+    const dx = move.x;
+    const dy = move.y;
     let angle;
     if (dx !== 0 || dy !== 0) {
       angle = Math.atan2(dy, dx);
@@ -2348,9 +2723,36 @@
     tryDodge(game.player, angle);
   }
 
+  function readMovementInput() {
+    const held = (...codes) => codes.filter((code) => input.keys.has(code));
+    const pickAxis = (negativeCodes, positiveCodes) => {
+      const negative = held(...negativeCodes);
+      const positive = held(...positiveCodes);
+      if (negative.length > 0 && positive.length > 0) {
+        const negativeTime = Math.max(...negative.map((code) => input.keyTime[code] || 0));
+        const positiveTime = Math.max(...positive.map((code) => input.keyTime[code] || 0));
+        // 同时按住相反方向时，以「后按下」的方向为准；这也能避免 W 键
+        // 的 keyup 丢失后一直抵消 S（表现为只能左右移动）。
+        return positiveTime > negativeTime ? 1 : -1;
+      }
+      if (positive.length > 0) return 1;
+      if (negative.length > 0) return -1;
+      return 0;
+    };
+    return {
+      x: pickAxis(['KeyA', 'ArrowLeft'], ['KeyD', 'ArrowRight']),
+      y: pickAxis(['KeyW', 'ArrowUp'], ['KeyS', 'ArrowDown']),
+    };
+  }
+
   function updatePlayer(dt) {
     const player = game.player;
     if (!player) return;
+
+    if (updateThrow(player, dt)) {
+      updatePlayerAim();
+      return;
+    }
 
     if (updateBounce(player, dt)) {
       updatePlayerAim();
@@ -2367,21 +2769,23 @@
       return;
     }
 
-    let dx = 0;
-    let dy = 0;
-    if (input.keys.has('KeyW') || input.keys.has('ArrowUp')) dy -= 1;
-    if (input.keys.has('KeyS') || input.keys.has('ArrowDown')) dy += 1;
-    if (input.keys.has('KeyA') || input.keys.has('ArrowLeft')) dx -= 1;
-    if (input.keys.has('KeyD') || input.keys.has('ArrowRight')) dx += 1;
+    // 打坐：入定期间不能移动，但仍可出招/出牌。
+    if (player.rootTimer > 0) {
+      player.moving = false;
+      updatePlayerAim();
+      player.facing = player.aimAngle;
+      if (input.orbHeld) playerOrb(false);
+      return;
+    }
+
+    const move = readMovementInput();
+    const dx = move.x;
+    const dy = move.y;
 
     if (dx !== 0 || dy !== 0) {
       const direction = norm(dx, dy);
-      stopMeditation(player);
-      const speed = getMoveSpeed();
+      const speed = getMoveSpeed(player);
       const moved = moveFighter(player, direction.x * speed * dt, direction.y * speed * dt);
-      if (moved > 0.05) {
-        player.mana = Math.max(0, player.mana - CONFIG.moveManaPerSec * dt);
-      }
       player.moving = moved > 0.05;
     } else {
       player.moving = false;
@@ -2389,6 +2793,9 @@
 
     updatePlayerAim();
     player.facing = player.aimAngle;
+
+    // 按住右键持续御灵（反制优先于发射）。
+    if (input.orbHeld) playerOrb(false);
   }
 
   /* =======================================================================
@@ -2402,6 +2809,12 @@
       target,
       thinkTimer: 0.08,
       attackDelay: 0.3,
+      // AI 手速上限：两张牌之间至少间隔 1.5 秒。
+      cardCooldown: 0,
+      gatherCooldown: 0,
+      lastAttackAt: -10,
+      lastMeleeAt: -Infinity,
+      meleeWaitUntil: 0,
       mode: 'pursue',
       modeLock: 0,
       lastAttackType: null,
@@ -2514,26 +2927,6 @@
     return false;
   }
 
-  function aiTryParryProjectile(threat) {
-    const actor = game.enemy;
-    if (!threat || actor.meleeCooldown > 0 || actor.dodgeRemaining > 0) return false;
-    const accessCost = getMeleeCost(actor);
-    if (!canSpend(actor, accessCost)) return false;
-    const projectile = threat.projectile;
-    const d = dist(actor.x, actor.y, projectile.x, projectile.y);
-    const reach = getMeleeReach(actor);
-    if (d > reach * 1.7) return false;
-    if (threat.time > 0.34) return false;
-    const predictedX = projectile.x + projectile.vx * 0.09;
-    const predictedY = projectile.y + projectile.vy * 0.09;
-    const angle = Math.atan2(predictedY - actor.y, predictedX - actor.x);
-    if (tryMelee(actor, angle)) {
-      game.ai.lastReason = '挥剑弹反';
-      return true;
-    }
-    return false;
-  }
-
   function assessAIThreats() {
     const aiState = game.ai;
     const actor = game.enemy;
@@ -2550,29 +2943,12 @@
       distance < meleeReach + actor.radius * 2 &&
       hasMeleeLine(player, actor)
     );
-    const playerVeryClose = distance < meleeReach * 1.12;
-
-    if (actor.meditating && (threat || playerWinding)) {
-      stopMeditation(actor);
-      aiState.lastReason = '出定避势';
-    }
 
     if (threat && threat.time < 0.6) {
       if (actor.dodgeCooldown <= 0 && actor.dodgeRemaining <= 0) {
         const dodgeChance = actor.hp / actor.maxHp > 0.32 ? 0.82 : 0.68;
         if (Math.random() < dodgeChance) {
           if (aiTryDodgeFromThreat(threat)) return true;
-        }
-      }
-      if (actor.dodgeCooldown > 0 && threat.time < 0.3) {
-        const accessCost = getMeleeCost(actor);
-        if (
-          actor.meleeCooldown <= 0 &&
-          canSpend(actor, accessCost) &&
-          threat.distance < getMeleeReach(actor) * 1.65 &&
-          Math.random() < 0.46
-        ) {
-          if (aiTryParryProjectile(threat)) return true;
         }
       }
     }
@@ -2587,11 +2963,6 @@
           return true;
         }
       }
-    }
-
-    if (playerVeryClose && player.meditating && distance < meleeReach * 0.95) {
-      // An opponent meditating inside sword reach is a free opening, not a threat.
-      actor.aiStateLabel = '寻隙';
     }
 
     return false;
@@ -2611,105 +2982,37 @@
     return aiState.hideSpot;
   }
 
-  function aiShouldSeekMeditation() {
-    const aiState = game.ai;
-    const actor = game.enemy;
-    const player = game.player;
-    if (!aiState || !actor || !player) return false;
-    if (actor.meditateCooldown > 0 || actor.hp <= 0) return false;
-
-    const distance = distanceBetweenFighters();
-    const reach = getMeleeReach(actor);
-    const hpRatio = actor.hp / actor.maxHp;
-    const playerHpRatio = player.hp / player.maxHp;
-    const behindCover = !hasProjectileLine(player, actor);
-    const pressured = distance < Math.min(300 * world.scale, reach * 2.4);
-    const playerThreat =
-      (player.swing && !player.swing.resolved) ||
-      findThreatProjectile(actor, player);
-
-    if (playerThreat) return false;
-    if (actor.mana > 44 && !(player.mana < 16 && player.meditating && actor.mana > 25)) return false;
-    if (distance < reach * 0.85) return false;
-
-    const needsSafety = !behindCover && distance < 255 * world.scale;
-    if (needsSafety) return false;
-
-    if (pressured && hpRatio > 0.52 && actor.mana > 12 && !behindCover) {
-      return false;
-    }
-
-    // When the player is low on spirit and meditating, mirroring can be wise,
-    // but only out of immediate punishment range.
-    if (player.mana < 16 && player.meditating && distance > 150 * world.scale) {
-      return true;
-    }
-
-    if (behindCover) return true;
-    return distance > 285 * world.scale || actor.mana < 13 || hpRatio < 0.35;
-  }
-
-  function aiTryStartMeditation() {
-    const actor = game.enemy;
-    if (!aiShouldSeekMeditation()) return false;
-    if (startMeditation(actor)) {
-      game.ai.lastReason = '掩体入定';
-      game.ai.mode = 'meditate';
-      game.aiStateLabel = '入定';
-      return true;
-    }
+  function aiHandleExhaustion() {
+    // 灵力枯竭已不再有任何负面效果，AI 也不需要专门退避。
     return false;
   }
 
-  function aiHandleExhaustion() {
-    const aiState = game.ai;
+  // AI 是否可以真正砍中：必须落在命中距离内、有近战线、且对手不在无敌闪避中。
+  // 留一点余量，避免出剑的 75ms 前摇里对手走开导致空挥。
+  function aiCanHitWithMelee() {
     const actor = game.enemy;
     const player = game.player;
-    if (!aiState || !actor || !player || !actor.exhausted) return false;
+    if (!actor || !player || player.hp <= 0) return false;
+    if (player.invuln > 0) return false;
+    const hitRange = getMeleeReach(actor) + player.radius * 0.62;
+    return distanceBetweenFighters() <= hitRange - 6 * world.scale && hasMeleeLine(actor, player);
+  }
 
-    const distance = distanceBetweenFighters();
-    const reach = getMeleeReach(actor);
-    const behindCover = !hasProjectileLine(player, actor);
-    const playerWinding = Boolean(
-      player.swing &&
-      !player.swing.resolved &&
-      distance < getMeleeReach(player) * 1.35 &&
-      hasMeleeLine(player, actor)
-    );
-    const projectileThreat = findThreatProjectile(actor, player);
-    const immediateThreat = playerWinding || Boolean(projectileThreat);
+  function aiMeleeGateReady() {
+    const aiState = game.ai;
+    if (!aiState || !Number.isFinite(aiState.lastMeleeAt)) return true;
+    return game.battleTime - aiState.lastMeleeAt >= CONFIG.aiMeleeAttackInterval;
+  }
 
-    // Exhaustion is the one state in which seeking spirit recovery must
-    // override the usual punish/approach instinct.
-    if (actor.meditateCooldown > 0 || immediateThreat) {
-      aiState.mode = 'evade';
-      aiState.lastReason = actor.meditateCooldown > 0 ? '灵力枯竭 · 游斗待息' : '灵力枯竭 · 避锋';
-      aiState.modeLock = 0.2;
-      return true;
-    }
-
-    const safeToSit =
-      distance > reach * 1.15 &&
-      (behindCover || distance > 285 * world.scale);
-
-    if (safeToSit && startMeditation(actor)) {
-      aiState.mode = 'meditate';
-      aiState.lastReason = '灵力枯竭 · 入定回灵';
-      return true;
-    }
-
-    const cover = aiGetOrChooseCoverSpot(actor);
-    if (cover) {
-      aiState.mode = 'hide';
-      aiState.hideTimer = 3.5;
-      aiState.lastReason = '灵力枯竭 · 寻掩体入定';
-      aiState.modeLock = 1;
-    } else {
-      aiState.mode = 'evade';
-      aiState.lastReason = '灵力枯竭 · 拉开距离';
-      aiState.modeLock = 1;
-    }
-    return true;
+  function aiWaitForMelee() {
+    const aiState = game.ai;
+    if (!aiState) return;
+    aiState.meleeWaitUntil =
+      (Number.isFinite(aiState.lastMeleeAt) ? aiState.lastMeleeAt : game.battleTime) +
+      CONFIG.aiMeleeAttackInterval;
+    aiState.mode = 'pursue';
+    aiState.lastReason = '等待出剑';
+    aiState.modeLock = 0.12;
   }
 
   function aiTryCloseAttack(inMelee, meleeLOS, shotLOS) {
@@ -2729,30 +3032,19 @@
     const liveShotLOS = hasProjectileLine(actor, player);
     const meleeCost = getMeleeCost(actor);
     const orbCost = getOrbCost(actor);
-    const canMelee = liveMeleeLOS && meleeLOS && inMelee && actor.meleeCooldown <= 0 && canSpend(actor, meleeCost);
+    const canMelee =
+      liveMeleeLOS && meleeLOS && inMelee && actor.meleeCooldown <= 0 && canSpend(actor, meleeCost) && aiCanHitWithMelee();
     const atRefreshCap = actor.rangedCombo >= CONFIG.orbRefreshCombo;
     const canOrb = liveShotLOS && shotLOS && actor.orbCooldown <= 0 && canSpend(actor, orbCost) && !atRefreshCap;
     const angle = Math.atan2(player.y - 12 * world.scale - (actor.y - 12 * world.scale), player.x - actor.x);
 
-    if (canMelee || canOrb) {
-      if (actor.empowered) {
-        if (canMelee) {
-          if (tryMelee(actor, angle)) {
-            aiState.lastAttackType = 'melee';
-            aiState.attackDelay = 0.16;
-            aiState.lastReason = '强化近战';
-            return true;
-          }
-        } else if (canOrb) {
-          if (tryOrb(actor, angle)) {
-            aiState.lastAttackType = 'orb';
-            aiState.attackDelay = 0.18;
-            aiState.lastReason = '强化灵子';
-            return true;
-          }
-        }
-      }
+    // 已决定近战但 1 秒间隔未到：原地等待，期间不御灵。
+    if (canMelee && !aiMeleeGateReady()) {
+      aiWaitForMelee();
+      return true;
+    }
 
+    if (canMelee || canOrb) {
       let chooseMelee;
       if (canMelee && canOrb) {
         let meleeWeight = aiState.lastAttackType === 'melee' ? 0.44 : 0.58;
@@ -2805,13 +3097,20 @@
     if (cost > 0 && actor.mana - cost < 5 && player.hp > CONFIG.orbDamage) return false;
 
     const distance = distanceBetweenFighters();
+    // 近战等待期间不御灵（玩家拉开距离后解除）。
+    if (
+      aiState.meleeWaitUntil > 0 &&
+      game.battleTime < aiState.meleeWaitUntil &&
+      distance <= getMeleeReach(actor) * 1.9 + player.radius
+    ) {
+      return false;
+    }
     const playerHpRatio = player.hp / player.maxHp;
     let chance = aiState.lastAttackType === 'orb' ? 0.64 : 0.84;
     if (actor.rangedCombo < CONFIG.orbFreeShots) chance += 0.08;
     if (aiState.memoryReady) chance += Math.max(0, -aiState.memoryBias) * 0.1;
     if (playerHpRatio < 0.35) chance += 0.1;
-    if (player.meditating) chance += 0.08;
-    if (player.dodgeCooldown > 1.2) chance += 0.06;
+    if (player.dodgeCooldown > 0) chance += 0.06;
     if (distance > 340 * world.scale) chance += 0.04;
     if (Math.random() > Math.min(0.96, chance)) return false;
 
@@ -2826,25 +3125,6 @@
       return true;
     }
     return false;
-  }
-
-  function aiEvaluateOrbPressure() {
-    const actor = game.enemy;
-    const player = game.player;
-    if (!actor || !player) return -Infinity;
-    const distance = distanceBetweenFighters();
-    const playerHpRatio = player.hp / player.maxHp;
-    let value = 1; // Resetting a four-orb chain opens two free shots.
-    if (player.hp <= CONFIG.orbDamage * 2) value += 5;
-    else if (player.hp <= 50) value += 3;
-    else if (playerHpRatio < 0.4) value += 1;
-    if (player.meditating) value += 3;
-    if (player.mana < 18) value += 2;
-    if (player.dodgeCooldown > 1.2) value += 1;
-    if (actor.mana >= 30) value += 1;
-    if (distance > getMeleeReach(actor) * 1.3) value += 1;
-    if (actor.hp / actor.maxHp < 0.3) value -= 1;
-    return value;
   }
 
   function aiHandleOrbRefresh(shotLOS, meleeLOS, inMelee) {
@@ -2865,7 +3145,11 @@
 
     // Step 1: if the sword can actually reach the player, refresh with it.
     if (inMeleeNow) {
-      if (actor.meleeCooldown <= 0 && aiState.attackDelay <= 0 && canSpend(actor, meleeCost)) {
+      if (!aiMeleeGateReady()) {
+        aiWaitForMelee();
+        return true;
+      }
+      if (aiCanHitWithMelee() && actor.meleeCooldown <= 0 && aiState.attackDelay <= 0 && canSpend(actor, meleeCost)) {
         if (tryMelee(actor, angle)) {
           aiState.lastAttackType = 'melee';
           aiState.attackDelay = 0.14 + Math.random() * 0.1;
@@ -2873,64 +3157,17 @@
           return true;
         }
       }
-      // The player is in reach but the sword is not ready yet. Wait for the
-      // priority melee opening instead of spending the reset on a whiff.
-      aiState.mode = distance > getMeleeReach(actor) * 1.1 ? 'pursue' : 'strafe';
+      // 剑还没好：贴住对手等下一次出手，而不是绕圈拖时间。
+      aiState.mode = Math.random() < 0.2 ? 'strafe' : 'pursue';
       aiState.lastReason = '观势 · 待剑清灵';
       aiState.modeLock = 0.2;
       return true;
     }
 
-    // Step 2: if the sword cannot reach, but orb pressure is highly valuable,
-    // deliberately use a sword swing to clear the chain, then fire a spirit orb.
-    const canRefreshNow =
-      actor.meleeCooldown <= 0 &&
-      aiState.attackDelay <= 0 &&
-      canSpend(actor, meleeCost);
-    const canFireAfterRefresh = shotLOS && actor.orbCooldown <= 0;
-    if (canRefreshNow && canFireAfterRefresh && aiEvaluateOrbPressure() >= 4) {
-      if (tryMelee(actor, angle)) {
-        aiState.lastAttackType = 'melee';
-        if (tryOrb(actor, angle)) {
-          aiState.lastAttackType = 'orb';
-          aiState.attackDelay = 0.2 + Math.random() * 0.12;
-          aiState.lastReason = '挥剑清灵 · 灵子压阵';
-          return true;
-        }
-        aiState.lastReason = '挥剑清灵 · 待机御灵';
-        aiState.attackDelay = 0.18;
-        return true;
-      }
-    }
+    // Step 2: 剑够不到就不要空挥；贴上去，等真正进入命中距离再用剑清连击。
 
-    // Step 3: no obvious attack profit. Hold the chain, keep watching, and
-    // look for a melee opening without firing another expensive orb.
-    const hpRatio = actor.hp / actor.maxHp;
-    const advantage =
-      hpRatio -
-      player.hp / player.maxHp +
-      (actor.mana / actor.maxMana - player.mana / player.maxMana) * 0.35;
-    const pressureDistance = Math.max(185 * world.scale, getMeleeReach(actor) * 1.65);
-    const punishMeditation =
-      player.meditating &&
-      hpRatio > 0.22 &&
-      distance < 520 * world.scale;
-    if (punishMeditation) {
-      aiState.mode = distance > getMeleeReach(actor) * 1.2 ? 'pursue' : 'strafe';
-      aiState.lastReason = '趁虚逼近 · 寻隙清灵';
-      aiState.modeLock = 0.35;
-      return true;
-    }
-    if (
-      hpRatio < 0.42 &&
-      game.battleTime >= aiState.evadeBlockedUntil &&
-      (advantage < -0.15 || distance < pressureDistance)
-    ) {
-      aiState.mode = 'evade';
-      aiState.lastReason = '游斗 · 伺机清灵';
-      aiState.modeLock = 1.1;
-      return true;
-    }
+    // Step 3: 连击已满时不能靠游斗拖时间——游斗会一直拉距离，永远回不到
+    // 近战清连击。这里直接贴近，到近身再由 Step 1 出剑重置。
     aiState.mode = distance > getMeleeReach(actor) * 1.2 ? 'pursue' : 'strafe';
     aiState.lastReason = '观势 · 见机清灵';
     aiState.modeLock = 0.3;
@@ -2953,7 +3190,6 @@
     const manaRatio = actor.mana / actor.maxMana;
     const playerManaRatio = player.mana / player.maxMana;
     const advantage = hpRatio - playerHpRatio + (manaRatio - playerManaRatio) * 0.35;
-    const playerMeditating = player.meditating;
     const behindCover = !shotLOS;
     const lowMana = actor.mana < 30;
     const lowHp = hpRatio < 0.42;
@@ -2972,40 +3208,13 @@
 
     if (aiHandleExhaustion()) return;
 
-    if (aiTryStartMeditation()) {
-      aiState.mode = 'meditate';
-      return;
-    }
-
-    if (lowMana && actor.meditateCooldown <= 0 && !behindCover && distance > 250 * world.scale) {
-      const cover = aiGetOrChooseCoverSpot(actor);
-      if (cover) {
-        aiState.mode = 'hide';
-        aiState.hideTimer = 2.8;
-        aiState.lastReason = '寻掩体入定';
-        aiState.modeLock = 1.6;
-        return;
-      }
-    }
-
-    if (lowMana && actor.meditateCooldown <= 0 && behindCover) {
-      if (!(pressured && hpRatio > 0.55 && actor.mana > 14)) {
-        if (startMeditation(actor)) {
-          aiState.mode = 'meditate';
-          aiState.lastReason = '掩体入定';
-          return;
-        }
-      }
-    }
-
     // Seeking cover is only useful when there is still spirit to restore.
     // At high mana a wounded AI should keep moving defensively instead of
     // repeatedly running to cover and sitting back down.
     if (
       lowHp &&
       actor.mana < 70 &&
-      distance < 245 * world.scale &&
-      actor.meditateCooldown <= 0
+      distance < 245 * world.scale
     ) {
       const cover = aiGetOrChooseCoverSpot(actor);
       if (cover && dist(actor.x, actor.y, cover.x, cover.y) > 18 * world.scale) {
@@ -3025,10 +3234,10 @@
       return;
     }
 
-    const shouldPunish = playerMeditating && distance < meleeReach * 2.2;
+    const shouldPunish = playerHpRatio < 0.3 && distance > meleeReach * 2.2;
     if (shouldPunish) {
       aiState.mode = 'pursue';
-      aiState.lastReason = '寻隙逼近';
+      aiState.lastReason = '乘势逼近';
       aiState.modeLock = 0.25;
       return;
     }
@@ -3046,23 +3255,21 @@
       return;
     }
 
-    if (lowMana && game.battleTime >= aiState.evadeBlockedUntil && actor.meditateCooldown > 0 && !pressured) {
+    if (
+      lowMana &&
+      game.battleTime >= aiState.evadeBlockedUntil &&
+      (pressured || distance < 300 * world.scale)
+    ) {
       aiState.mode = 'evade';
       aiState.lastReason = '节约灵力';
       aiState.modeLock = 1.1;
       return;
     }
 
-    const punishMeditation =
-      playerMeditating &&
-      distance < 520 * world.scale &&
-      hpRatio > 0.22;
-
     if (
       lowHp &&
-      !punishMeditation &&
       game.battleTime >= aiState.evadeBlockedUntil &&
-      (advantage < -0.15 || pressured)
+      (pressured || (advantage < -0.15 && distance < 300 * world.scale))
     ) {
       aiState.mode = 'evade';
       aiState.lastReason = '游斗避锋';
@@ -3078,12 +3285,21 @@
     }
 
     if (inMelee) {
-      aiState.mode = 'strafe';
-      aiState.lastReason = '游身寻隙';
-      aiState.strafeTimer -= 0.12;
-      if (aiState.strafeTimer <= 0) {
-        aiState.strafeTimer = 1.15 + Math.random() * 0.8;
-        aiState.strafeSign *= -1;
+      // 近身时减少绕圈：大部分时间正面贴身压迫，只偶尔小侧步找角度。
+      const justSwung = game.battleTime - aiState.lastAttackAt < 0.6;
+      if (!justSwung && Math.random() < 0.22) {
+        aiState.mode = 'strafe';
+        aiState.lastReason = '侧步找角';
+        aiState.modeLock = 0.3;
+        aiState.strafeTimer -= 0.12;
+        if (aiState.strafeTimer <= 0) {
+          aiState.strafeTimer = 1.2 + Math.random() * 0.9;
+          aiState.strafeSign *= -1;
+        }
+      } else {
+        aiState.mode = 'pursue';
+        aiState.lastReason = '贴身压迫';
+        aiState.modeLock = 0.22;
       }
       return;
     }
@@ -3097,7 +3313,7 @@
     const actor = game.enemy;
     if (!aiState || !actor) return null;
     if (!aiState.hideSpot || aiState.hideTimer <= 0) {
-      if (actor.meditateCooldown <= 0 && actor.mana < 44) {
+      if (actor.mana < 44) {
         aiState.hideSpot = findCoverSpot(actor);
         aiState.hideTimer = 3.2;
       }
@@ -3289,26 +3505,24 @@
       actor.moving = false;
       return;
     }
-    if (actor.dodgeRemaining > 0) {
-      updateDodge(actor, dt);
+    // 打坐期间 AI 也不能移动（但仍可出招/出牌）。
+    if (actor.rootTimer > 0) {
+      actor.moving = false;
       return;
     }
-    if (actor.meditating) {
-      actor.moving = false;
+    if (actor.dodgeRemaining > 0) {
+      updateDodge(actor, dt);
       return;
     }
 
     if (aiState.recoveryTimer > 0) {
       aiState.recoveryTimer = Math.max(0, aiState.recoveryTimer - dt);
-      const speed = getMoveSpeed();
+      const speed = getMoveSpeed(actor);
       const moved = moveFighter(
         actor,
         Math.cos(aiState.recoveryAngle) * speed * dt,
         Math.sin(aiState.recoveryAngle) * speed * dt
       );
-      if (moved > 0.02) {
-        actor.mana = Math.max(0, actor.mana - CONFIG.moveManaPerSec * dt);
-      }
       actor.moving = moved > 0.02;
       actor.facing = aiState.recoveryAngle;
       if (moved <= 0.02) aiState.recoveryTimer = 0;
@@ -3320,11 +3534,6 @@
     let target = null;
     let stopDistance = 0;
 
-    if (aiState.mode === 'meditate') {
-      actor.moving = false;
-      return;
-    }
-
     if (aiState.mode === 'hide') {
       const spot = getAIHidingSpot();
       if (spot) {
@@ -3333,10 +3542,6 @@
         const behindCover = !hasProjectileLine(player, actor);
         if (dist(actor.x, actor.y, spot.x, spot.y) < 18 * world.scale && behindCover) {
           actor.moving = false;
-          if (aiState.mode === 'hide' && startMeditation(actor)) {
-            aiState.mode = 'meditate';
-            aiState.lastReason = '掩体入定';
-          }
           return;
         }
       } else {
@@ -3367,12 +3572,12 @@
       const side = aiState.strafeSign;
       const perp = Math.atan2(player.y - actor.y, player.x - actor.x) + (Math.PI / 2) * side;
       target = {
-        x: player.x + Math.cos(perp) * Math.max(reach * 0.72, 65 * world.scale),
-        y: player.y + Math.sin(perp) * Math.max(reach * 0.72, 65 * world.scale),
+        x: player.x + Math.cos(perp) * Math.max(reach * 0.52, 50 * world.scale),
+        y: player.y + Math.sin(perp) * Math.max(reach * 0.52, 50 * world.scale),
       };
       target.x = clamp(target.x, world.play.x + actor.radius, world.play.x + world.play.w - actor.radius);
       target.y = clamp(target.y, world.play.y + actor.radius, world.play.y + world.play.h - actor.radius);
-      stopDistance = 8 * world.scale;
+      stopDistance = 6 * world.scale;
     } else {
       const pursuit = aiGetPursuitTarget(actor, player);
       target = { x: pursuit.x, y: pursuit.y };
@@ -3417,11 +3622,10 @@
       return;
     }
 
-    const speed = getMoveSpeed();
+    const speed = getMoveSpeed(actor);
     const desiredMove = speed * dt;
     const moved = moveFighter(actor, toTarget.x * desiredMove, toTarget.y * desiredMove);
     if (moved > 0.02) {
-      actor.mana = Math.max(0, actor.mana - CONFIG.moveManaPerSec * dt);
       actor.moving = true;
     } else {
       actor.moving = false;
@@ -3481,11 +3685,132 @@
     }
   }
 
+  // AI 用灵力聚精魄：灵力充裕且暂时安全时执行。
+  function aiTryGather() {
+    const aiState = game.ai;
+    const actor = game.enemy;
+    const player = game.player;
+    if (!aiState || !actor || !player) return false;
+    if (aiState.gatherCooldown > 0) return false;
+    if (actor.essence >= CONFIG.essenceMax) return false;
+    if (actor.mana < 170) return false;
+    if (!canGather(actor)) return false;
+    if (player.swing && !player.swing.resolved) return false;
+    if (findThreatProjectile(actor, player)) return false;
+    if (!castSpiritGather(actor)) return false;
+    aiState.gatherCooldown = 2.4;
+    aiState.lastReason = '聚灵';
+    return true;
+  }
+
+  // AI 出牌策略：按局势从手牌里挑一张最合适的。
+  function aiCardPlan() {
+    const actor = game.enemy;
+    const player = game.player;
+    const state = game.enemyCards;
+    if (!actor || !player || !state) return null;
+    const hand = state.hand;
+    const distance = distanceBetweenFighters();
+    const hpRatio = actor.hp / actor.maxHp;
+    const find = (id) => {
+      if (hand.indexOf(id) < 0) return null;
+      if (id === 'heal' && actor.healUses >= CONFIG.healUsesPerMatch) return null;
+      const card = cardById(id);
+      return card && actor.essence >= card.cost ? card : null;
+    };
+    const pointAt = (x, y) => ({
+      x: clamp(x, world.play.x, world.play.x + world.play.w),
+      y: clamp(y, world.play.y, world.play.y + world.play.h),
+    });
+
+    const heal = find('heal');
+    if (heal && hpRatio < 0.55 && actor.healRemaining <= 0) {
+      return { card: heal, point: { x: actor.x, y: actor.y } };
+    }
+    const hammer = find('hammer');
+    if (hammer && player.stunRemaining <= 0) {
+      return { card: hammer, point: { x: player.x, y: player.y } };
+    }
+    const blood = find('blood');
+    if (blood && distance < 300 * world.scale && actor.damageBoostTimer <= 0 && hpRatio > 0.3) {
+      return { card: blood, point: { x: actor.x, y: actor.y } };
+    }
+    const steal = find('steal') || find('stealPlus');
+    if (steal && hasStealableBuff(player)) {
+      return { card: steal, point: { x: actor.x, y: actor.y } };
+    }
+    const sword = find('greatsword');
+    if (sword && distance < 460 * world.scale) {
+      return { card: sword, point: pointAt(player.x, player.y) };
+    }
+    const blink = find('blink');
+    if (blink) {
+      if (hpRatio < 0.4 && distance < 240 * world.scale) {
+        const away = Math.atan2(actor.y - player.y, actor.x - player.x);
+        return {
+          card: blink,
+          point: pointAt(
+            actor.x + Math.cos(away) * 300 * world.scale,
+            actor.y + Math.sin(away) * 300 * world.scale
+          ),
+        };
+      }
+      if (distance > 420 * world.scale) {
+        const toward = Math.atan2(player.y - actor.y, player.x - actor.x);
+        return {
+          card: blink,
+          point: pointAt(
+            actor.x + Math.cos(toward) * 260 * world.scale,
+            actor.y + Math.sin(toward) * 260 * world.scale
+          ),
+        };
+      }
+    }
+    const wind = find('wind');
+    if (wind && distance > 260 * world.scale && actor.speedBoostTimer <= 0) {
+      return { card: wind, point: { x: actor.x, y: actor.y } };
+    }
+    const stillness = find('stillness');
+    if (
+      stillness &&
+      distance > 420 * world.scale &&
+      !(player.swing && !player.swing.resolved) &&
+      !findThreatProjectile(actor, player)
+    ) {
+      return { card: stillness, point: { x: actor.x, y: actor.y } };
+    }
+    const gold = find('goldfinger');
+    if (gold && actor.essence >= 7) {
+      return { card: gold, point: { x: actor.x, y: actor.y } };
+    }
+    return null;
+  }
+
+  function aiTryPlayCard() {
+    const aiState = game.ai;
+    const actor = game.enemy;
+    if (!aiState || !actor || !canUseCards(actor) || aiState.cardCooldown > 0) return false;
+    const plan = aiCardPlan();
+    if (!plan) return false;
+    if (!playCard(actor, plan.card, plan.point)) return false;
+    // AI 手速上限：1.5 秒内最多打出一张牌。
+    aiState.cardCooldown = 1.5;
+    aiState.lastReason = `施放${plan.card.name}`;
+    aiState.modeLock = Math.max(aiState.modeLock, 0.3);
+    return true;
+  }
+
   function updateAI(dt) {
     const actor = game.enemy;
     const player = game.player;
     const aiState = game.ai;
     if (!actor || !player || !aiState) return;
+
+    if (updateThrow(actor, dt)) {
+      actor.aimAngle = Math.atan2(player.y - actor.y, player.x - actor.x);
+      return;
+    }
+
     if (game.debugFreezeAI) {
       actor.moving = false;
       return;
@@ -3493,6 +3818,8 @@
 
     aiState.thinkTimer -= dt;
     aiState.attackDelay = Math.max(0, aiState.attackDelay - dt);
+    aiState.cardCooldown = Math.max(0, aiState.cardCooldown - dt);
+    aiState.gatherCooldown = Math.max(0, aiState.gatherCooldown - dt);
     aiState.strafeTimer -= dt;
     aiState.hideTimer -= dt;
     aiState.approachAge += dt;
@@ -3503,6 +3830,11 @@
 
     if (!canAct(actor)) {
       actor.moving = false;
+      // 眩晕时仍然可以聚灵/出牌。
+      if (actor.stunRemaining > 0) {
+        if (aiTryGather()) return;
+        aiTryPlayCard();
+      }
       return;
     }
 
@@ -3516,33 +3848,25 @@
       return;
     }
 
+    // AI 也会反制：玩家刀光出现时立刻尝试抓取（不再有概率降智）。
+    const incomingSwing = player.swing;
+    if (incomingSwing && !incomingSwing.aiCounterChecked && incomingSwing.elapsed < 0.2) {
+      incomingSwing.aiCounterChecked = true;
+      if (tryCounter(actor)) {
+        aiState.lastReason = '反制';
+        aiState.modeLock = 0.5;
+        return;
+      }
+    }
+
     if (aiState.threatTimer <= 0) {
       aiState.threatTimer = 0.055 + Math.random() * 0.025;
       if (assessAIThreats()) return;
     }
 
-    if (actor.meditating) {
-      if (actor.mana >= actor.maxMana - 0.5) {
-        stopMeditation(actor);
-        aiState.lastReason = '灵满出定';
-      } else {
-        const distance = distanceBetweenFighters();
-        const immediateDanger =
-          distance < getMeleeReach(player) * 1.15 ||
-          Boolean(findThreatProjectile(actor, player)) ||
-          (player.swing && !player.swing.resolved && dist(player.x, player.y, actor.x, actor.y) < getMeleeReach(player) * 1.25);
-        if (immediateDanger) {
-          stopMeditation(actor);
-          aiState.lastReason = '出定避势';
-          aiState.mode = 'evade';
-          aiState.modeLock = 0.9;
-        } else {
-          actor.moving = false;
-          actor.aimAngle = Math.atan2(player.y - actor.y, player.x - actor.x);
-          return;
-        }
-      }
-    }
+    // AI 也会聚灵与出牌。
+    if (aiTryGather()) return;
+    if (aiTryPlayCard()) return;
 
     if (aiState.thinkTimer <= 0) {
       aiState.thinkTimer = 0.1 + Math.random() * 0.06;
@@ -3566,13 +3890,43 @@
       if (!fighter) continue;
       fighter.meleeCooldown = Math.max(0, fighter.meleeCooldown - dt);
       fighter.orbCooldown = Math.max(0, fighter.orbCooldown - dt);
+      fighter.regenBlocked = Math.max(0, fighter.regenBlocked - dt);
+      if (Array.isArray(fighter.stealPlusTimers) && fighter.stealPlusTimers.length > 0) {
+        for (const timer of fighter.stealPlusTimers) timer.remaining -= dt;
+        const expired = fighter.stealPlusTimers.filter((timer) => timer.remaining <= 0);
+        for (const timer of expired) expireStealPlus(fighter, timer.slot);
+      }
+      fighter.speedBoostTimer = Math.max(0, fighter.speedBoostTimer - dt);
+      fighter.damageBoostTimer = Math.max(0, fighter.damageBoostTimer - dt);
+      fighter.stunRemaining = Math.max(0, fighter.stunRemaining - dt);
+      fighter.meditationTimer = Math.max(0, fighter.meditationTimer - dt);
+      if (fighter.rootTimer > 0) {
+        fighter.rootTimer = Math.max(0, fighter.rootTimer - dt);
+        if (fighter.rootTimer <= 0 && fighter.rootReward) {
+          fighter.rootReward = false;
+          fighter.essence = Math.min(CONFIG.essenceMax, fighter.essence + CONFIG.rootReward);
+          spawnFloater(fighter.x, fighter.y - 58 * world.scale, `+${CONFIG.rootReward} 精魄`, '#ffe6a8', 0.9, 14);
+          spawnRipple(fighter.x, fighter.y, '#9fb6d8', 0.5, fighter.radius * 2);
+        }
+      }
+      // 闪避冷却：只有一次，用完后 2 秒转好。
       fighter.dodgeCooldown = Math.max(0, fighter.dodgeCooldown - dt);
-      fighter.meditateCooldown = Math.max(0, fighter.meditateCooldown - dt);
+      fighter.counterCooldown = Math.max(0, fighter.counterCooldown - dt);
+      fighter.counterOrbLock = Math.max(0, fighter.counterOrbLock - dt);
       fighter.invuln = Math.max(0, fighter.invuln - dt);
       fighter.hitFlash = Math.max(0, fighter.hitFlash - dt);
       const swing = fighter.swing;
       if (swing) {
         swing.elapsed += dt;
+        // 玩家在距离内起手后，剑锋持续跟踪目标，避免 75ms 前摇里对手
+        // 横移/后撤导致原本已经瞄准的一剑打空。
+        const aimTarget = otherFighter(fighter);
+        if (swing.autoAim && aimTarget && aimTarget.hp > 0) {
+          const aim = Math.atan2(aimTarget.y - fighter.y, aimTarget.x - fighter.x);
+          swing.targetAngle = aim;
+          swing.startAngle = aim - CONFIG.meleeArc / 2;
+          swing.endAngle = aim + CONFIG.meleeArc / 2;
+        }
         if (!swing.resolved && swing.elapsed >= swing.hitAt) {
           swing.resolved = true;
           resolveMeleeSwing(fighter, swing);
@@ -3585,46 +3939,32 @@
     }
   }
 
-  function updateMeditationRegen(dt) {
-    // Both duelists use the same meditation rule: remain still, remain alive,
-    // and restore spirit at 20 points per second.
+  function updateRegen(dt) {
     for (const fighter of [game.player, game.enemy]) {
       if (!fighter || fighter.hp <= 0) continue;
-      if (!fighter.meditating || fighter.moving || fighter.dodgeRemaining > 0) continue;
-      fighter.mana = Math.min(
-        fighter.maxMana,
-        fighter.mana + CONFIG.meditateManaPerSec * dt
-      );
-    }
-  }
-
-  function updateExhaustion(dt) {
-    for (const fighter of [game.player, game.enemy]) {
-      if (!fighter) continue;
-      if (fighter.hp <= 0) {
-        fighter.exhausted = false;
-        continue;
+      // 被动回灵：站定 40 / 秒，移动 20 / 秒；出招后的 0.5 秒内停止回复。
+      if (fighter.regenBlocked <= 0) {
+        const rate = fighter.moving ? CONFIG.manaRegenMoving : CONFIG.manaRegenIdle;
+        fighter.mana = Math.min(fighter.maxMana, fighter.mana + rate * dt);
       }
-      const meleeCost = getMeleeCost(fighter);
-      const orbCost = getOrbCost(fighter);
-      const noAffordableAttack = meleeCost > fighter.mana + 0.0001 && orbCost > fighter.mana + 0.0001;
-      const wasExhausted = fighter.exhausted;
-      fighter.exhausted = noAffordableAttack;
-
-      if (fighter.exhausted) {
-        if (!wasExhausted && fighter === game.player) {
-          showToast('灵力枯竭 · 每秒流失 5 点气血，速速打坐回灵', 'warn', 2300);
-        }
-        fighter.exhaustTick += dt;
-        while (fighter.exhaustTick >= 1 && fighter.hp > 0) {
-          fighter.exhaustTick -= 1;
-          damageFighter(fighter, CONFIG.exhaustHpPerSec, {
-            source: 'exhaust',
-            showText: true,
-          });
+      // 精魄：每 6 秒自动 +1，上限 10。
+      if (fighter.essence < CONFIG.essenceMax) {
+        fighter.essenceTimer += dt;
+        while (fighter.essenceTimer >= CONFIG.essenceInterval && fighter.essence < CONFIG.essenceMax) {
+          fighter.essenceTimer -= CONFIG.essenceInterval;
+          fighter.essence += 1;
+          if (fighter === game.player) {
+            spawnFloater(fighter.x, fighter.y - 58 * world.scale, '+1 精魄', '#ffe6a8', 0.8, 13);
+          }
         }
       } else {
-        fighter.exhaustTick = 0;
+        fighter.essenceTimer = 0;
+      }
+      // 桃：持续回血。
+      if (fighter.healRemaining > 0) {
+        const step = Math.min(fighter.healRemaining, dt);
+        fighter.healRemaining = Math.max(0, fighter.healRemaining - dt);
+        fighter.hp = Math.min(fighter.maxHp, fighter.hp + step * fighter.healRate);
       }
     }
   }
@@ -3669,16 +4009,17 @@
     game.battleTime += dt;
     game.ambientTime += dt;
 
+    checkMeleeClash();
     tickTimers(dt);
     checkMeleeClash();
     updateProjectiles(dt);
+    updateGiantSwords(dt);
     updatePlayer(dt);
     if (isOnlineHost()) updateRemoteFighter(dt);
     else updateAI(dt);
     checkMeleeClash();
-    updateMeditationRegen(dt);
+    updateRegen(dt);
     separateFighters();
-    updateExhaustion(dt);
     updateEffects(dt);
     updateEndState(dt);
   }
@@ -4545,74 +4886,49 @@
     ctx.restore();
   }
 
+  // 读条技能（打坐）的头顶进度条。
+  function drawCastBar(fighter) {
+    if (!fighter || fighter.hp <= 0 || fighter.rootTimer <= 0) return;
+    const s = world.scale;
+    const total = Math.max(0.1, fighter.castDuration || CONFIG.rootDuration);
+    const progress = clamp(1 - fighter.rootTimer / total, 0, 1);
+    const width = 62 * s;
+    const height = 6 * s;
+    const x = fighter.x - width / 2;
+    const y = fighter.y - 92 * s;
+    ctx.save();
+    ctx.fillStyle = 'rgba(4, 12, 10, 0.86)';
+    ctx.fillRect(x - 1, y - 1, width + 2, height + 2);
+    ctx.strokeStyle = 'rgba(210, 182, 118, 0.8)';
+    ctx.lineWidth = Math.max(1, 1.2 * s);
+    ctx.strokeRect(x - 1, y - 1, width + 2, height + 2);
+    ctx.fillStyle = '#69d9bd';
+    ctx.fillRect(x, y, width * progress, height);
+    ctx.fillStyle = '#f4ecd6';
+    ctx.font = `${Math.max(9, 10 * s)}px ${getCanvasSerif()}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('打坐', fighter.x, y - 5 * s);
+    ctx.restore();
+  }
+
   function drawFighter(fighter, alpha = 1) {
     if (!fighter) return;
     const palette = fighter.palette;
     const s = world.scale;
     const dead = fighter.hp <= 0;
     const isDodging = fighter.dodgeRemaining > 0;
-    const meditating = fighter.meditating && !isDodging && !dead;
-
+    const meditating = fighter.meditationTimer > 0 && !isDodging && !dead;
 
     ctx.save();
     ctx.globalAlpha = alpha;
 
-    // Empowered aura, grounded and visible around the whole body.
-    if (fighter.empowered && !dead) {
-      const pulse = 0.5 + Math.sin(game.ambientTime * 7 + (fighter.team === 'player' ? 0 : 1.7)) * 0.5;
-      ctx.save();
-      ctx.translate(fighter.x, fighter.y);
-      ctx.globalCompositeOperation = 'lighter';
-      const aura = ctx.createRadialGradient(0, -16 * s, 0, 0, -16 * s, (40 + pulse * 9) * s);
-      aura.addColorStop(0, 'rgba(255, 235, 175, 0.25)');
-      aura.addColorStop(0.34, 'rgba(210, 244, 212, 0.12)');
-      aura.addColorStop(0.72, 'rgba(136, 220, 188, 0.045)');
-      aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
-      ctx.fillStyle = aura;
-      ctx.beginPath();
-      ctx.arc(0, -16 * s, (44 + pulse * 9) * s, 0, TAU);
-      ctx.fill();
-      ctx.strokeStyle = `rgba(255, 236, 177, ${0.42 + pulse * 0.26})`;
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.ellipse(0, 2 * s, (fighter.radius * 2.05 + pulse * 5 * s), fighter.radius * 0.64, 0, 0, TAU);
-      ctx.stroke();
-      ctx.strokeStyle = `rgba(173, 242, 216, ${0.2 + pulse * 0.18})`;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.ellipse(0, 2 * s, (fighter.radius * 1.55 + pulse * 3 * s), fighter.radius * 0.5, 0, 0, TAU);
-      ctx.stroke();
-      // A rising blade-like wisp at each shoulder.
-      for (const side of [-1, 1]) {
-        const flicker = Math.sin(game.ambientTime * 5.6 + side + (fighter.team === 'enemy' ? 1.5 : 0)) * 0.5 + 0.5;
-        ctx.strokeStyle = `rgba(255, 235, 177, ${0.18 + flicker * 0.24})`;
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        ctx.moveTo(side * fighter.radius * 0.45, -8 * s);
-        ctx.quadraticCurveTo(
-          side * fighter.radius * 0.8,
-          -30 * s,
-          side * fighter.radius * 0.42,
-          -53 * s - flicker * 5 * s
-        );
-        ctx.stroke();
-      }
-      ctx.globalCompositeOperation = 'source-over';
-      // Two floating ember motes.
-      for (let i = 0; i < 3; i += 1) {
-        const angle = game.ambientTime * 1.6 + i * (TAU / 3);
-        const px = Math.cos(angle) * (fighter.radius * 1.3);
-        const py = -10 * s + Math.sin(angle * 1.2 + i) * 9 * s;
-        ctx.fillStyle = `rgba(255, 233, 177, ${0.26 + pulse * 0.18})`;
-        ctx.beginPath();
-        ctx.arc(px, py, 1.5 * s, 0, TAU);
-        ctx.fill();
-      }
-      ctx.restore();
-    }
-
     if (meditating) {
       drawMeditationAura(fighter);
+    }
+    if (!dead) {
+      drawBloodAura(fighter);
+      drawWindTrail(fighter);
     }
 
     ctx.translate(fighter.x, fighter.y);
@@ -4764,9 +5080,165 @@
       ctx.restore();
     }
 
+    // Heal motes rise above the body.
+    if (!dead && fighter.healRemaining > 0) drawHealPlus(fighter, alpha, bodyHeight);
+
     // Sword light is drawn around the body and clipped naturally by nothing.
     if (fighter.swing && !dead) drawSwordArc(fighter);
     drawFighterTopMarks(fighter, bodyHeight);
+    ctx.restore();
+  }
+
+  // 嗜血奇术：暗红血气在身周翻涌。
+  function drawBloodAura(fighter) {
+    if (!fighter || fighter.damageBoostTimer <= 0 || fighter.hp <= 0) return;
+    const s = world.scale;
+    const time = game.ambientTime;
+    const height = 54 * s;
+    const radius = fighter.radius * 2.6;
+    const pulse = 0.9 + Math.sin(time * 5.2) * 0.1;
+
+    ctx.save();
+    ctx.translate(fighter.x, fighter.y);
+    ctx.globalCompositeOperation = 'lighter';
+
+    const glow = ctx.createRadialGradient(0, -height * 0.48, radius * 0.08, 0, -height * 0.48, radius * pulse);
+    glow.addColorStop(0, 'rgba(255, 72, 66, 0.52)');
+    glow.addColorStop(0.38, 'rgba(210, 22, 36, 0.3)');
+    glow.addColorStop(0.72, 'rgba(132, 0, 20, 0.14)');
+    glow.addColorStop(1, 'rgba(70, 0, 12, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.ellipse(0, -height * 0.48, radius * pulse, height * 1.02, 0, 0, TAU);
+    ctx.fill();
+
+    // Smoky blood mist wrapped around the torso.
+    ctx.fillStyle = 'rgba(196, 24, 38, 0.12)';
+    for (let i = 0; i < 3; i += 1) {
+      const a = time * 0.65 + (i / 3) * TAU;
+      ctx.beginPath();
+      ctx.ellipse(
+        Math.cos(a) * fighter.radius * 0.62,
+        -height * (0.5 + i * 0.16) + Math.sin(a * 1.7) * 4 * s,
+        fighter.radius * (0.95 - i * 0.16),
+        height * 0.24,
+        Math.sin(a) * 0.5,
+        0,
+        TAU
+      );
+      ctx.fill();
+    }
+
+    // Rising blood wisps.
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 7; i += 1) {
+      const phase = (time * 0.52 + i / 7) % 1;
+      const x = Math.sin(time * 1.7 + i * 2.1) * fighter.radius * 0.95;
+      const baseY = -height * (0.1 + phase * 1.05);
+      const sway = Math.sin(time * 2.4 + i * 1.4) * 7 * s;
+      ctx.strokeStyle = `rgba(${i % 2 ? '255, 92, 82' : '198, 22, 42'}, ${0.34 * (1 - phase)})`;
+      ctx.lineWidth = Math.max(1.4, (3.2 - phase * 2.1) * s);
+      ctx.beginPath();
+      ctx.moveTo(x, baseY + 24 * s);
+      ctx.quadraticCurveTo(x + sway, baseY + 10 * s, x + sway * 0.5, baseY - 12 * s);
+      ctx.stroke();
+    }
+
+    // Pulsing orbit ring and droplets.
+    ctx.globalAlpha = 0.62;
+    ctx.strokeStyle = 'rgba(255, 86, 82, 0.62)';
+    ctx.lineWidth = Math.max(1.2, 1.9 * s);
+    ctx.beginPath();
+    ctx.ellipse(0, -height * 0.43, radius * 0.78, radius * 0.27, 0, 0, TAU);
+    ctx.stroke();
+    ctx.globalAlpha = 0.38;
+    ctx.lineWidth = Math.max(1, 1.2 * s);
+    ctx.beginPath();
+    ctx.ellipse(0, -height * 0.43, radius * 0.55, radius * 0.2, 0, time * 0.8, time * 0.8 + Math.PI * 1.55);
+    ctx.stroke();
+    for (let i = 0; i < 5; i += 1) {
+      const a = time * 1.35 + (i / 5) * TAU;
+      const x = Math.cos(a) * radius * 0.78;
+      const y = -height * 0.43 + Math.sin(a) * radius * 0.27;
+      ctx.globalAlpha = 0.58 + Math.sin(a) * 0.2;
+      ctx.fillStyle = 'rgba(255, 92, 84, 0.85)';
+      ctx.beginPath();
+      ctx.arc(x, y, (1.8 + (i % 2) * 0.7) * s, 0, TAU);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // 轻身术：移动时在身后拖出青色风痕。
+  function drawWindTrail(fighter) {
+    if (!fighter || fighter.speedBoostTimer <= 0 || fighter.hp <= 0) return;
+    if (!fighter.moving && fighter.dodgeRemaining <= 0) return;
+    const s = world.scale;
+    const time = game.ambientTime;
+    let dx = fighter.x - fighter.prevX;
+    let dy = fighter.y - fighter.prevY;
+    if (Math.hypot(dx, dy) < 0.4) {
+      dx = Math.cos(fighter.facing);
+      dy = Math.sin(fighter.facing);
+    }
+    const angle = Math.atan2(dy, dx);
+
+    ctx.save();
+    ctx.translate(fighter.x, fighter.y);
+    ctx.rotate(angle);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+
+    for (let i = 0; i < 7; i += 1) {
+      const phase = (time * 2.6 + i * 0.15) % 1;
+      const lane = (i - 3) * 5.4 * s;
+      const length = (30 + phase * 72) * s;
+      const alpha = (1 - phase) * (i % 2 ? 0.3 : 0.52);
+      ctx.strokeStyle = `rgba(${i % 2 ? '112, 232, 226' : '198, 255, 238'}, ${alpha})`;
+      ctx.lineWidth = Math.max(1.2, (2.6 - phase * 1.5) * s);
+      ctx.beginPath();
+      ctx.moveTo(-5 * s, lane);
+      ctx.quadraticCurveTo(-length * 0.55, lane + Math.sin(time * 5 + i) * 6 * s, -length, lane * 0.38);
+      ctx.stroke();
+    }
+
+    // Little ankle gust and body swirl.
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = 'rgba(172, 250, 232, 0.9)';
+    ctx.lineWidth = Math.max(1.2, 1.6 * s);
+    for (let i = 0; i < 3; i += 1) {
+      const a = time * 5 + i * 2.1;
+      ctx.beginPath();
+      ctx.ellipse(-6 * s, -3 * s, (20 + i * 10) * s, (5.5 + i * 2) * s, 0, a, a + Math.PI * 1.3);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 0.28;
+    ctx.strokeStyle = 'rgba(220, 255, 246, 0.9)';
+    ctx.beginPath();
+    ctx.ellipse(0, -34 * s, 20 * s, 8 * s, Math.sin(time * 2) * 0.3, 0, Math.PI * 1.7);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 桃：绿色小加号从头顶缓缓升起。
+  function drawHealPlus(fighter, alpha, bodyHeight) {
+    if (!fighter || fighter.healRemaining <= 0) return;
+    const s = world.scale;
+    const time = game.ambientTime;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.shadowColor = 'rgba(76, 255, 132, 0.85)';
+    ctx.shadowBlur = 8 * s;
+    for (let i = 0; i < 7; i += 1) {
+      const phase = (time * 0.62 + i / 7) % 1;
+      const rise = -bodyHeight * 0.2 - phase * bodyHeight * 1.2;
+      const x = Math.sin(time * 1.8 + i * 1.9) * fighter.radius * 0.8;
+      const size = (3.4 + (1 - phase) * 2.2) * s;
+      const a = Math.sin(Math.PI * phase) * 0.92 * alpha;
+      ctx.fillStyle = `rgba(118, 255, 152, ${a})`;
+      ctx.fillRect(x - size * 0.4, rise - size * 1.7, size * 0.8, size * 3.4);
+      ctx.fillRect(x - size * 1.7, rise - size * 0.4, size * 3.4, size * 0.8);
+    }
     ctx.restore();
   }
 
@@ -5324,6 +5796,8 @@
     drawArena(game.ambientTime);
     drawGroundEffects();
     drawAfterimages();
+    if (game.player) drawFighterBuffs(game.player);
+    if (game.enemy) drawFighterBuffs(game.enemy);
 
     if (game.player) drawShadow(game.player);
     if (game.enemy) drawShadow(game.enemy);
@@ -5357,8 +5831,11 @@
       }
     }
 
+    drawGiantSwords();
     drawEffects();
     drawFloaters();
+    drawCastBar(game.player);
+    drawCastBar(game.enemy);
 
     if (game.playerHurtFlash > 0.01) {
       ctx.save();
@@ -5380,28 +5857,6 @@
 
     ctx.restore();
 
-    // Extra warm pulse when someone is in spirit exhaustion.
-    for (const fighter of [game.player, game.enemy]) {
-      if (fighter && fighter.exhausted && fighter.hp > 0) {
-        const pulse = 0.5 + Math.sin(game.ambientTime * 4.5) * 0.5;
-        ctx.save();
-        ctx.strokeStyle = `rgba(198, 73, 55, ${0.1 + pulse * 0.1})`;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.ellipse(
-          fighter.x,
-          fighter.y,
-          fighter.radius * (1.9 + pulse * 0.2),
-          fighter.radius * 0.65,
-          0,
-          0,
-          TAU
-        );
-        ctx.stroke();
-        ctx.restore();
-      }
-    }
-
     // Inner vignette to settle the canvas into the page.
     const edge = ctx.createRadialGradient(
       viewW / 2,
@@ -5422,6 +5877,70 @@
      09. HUD、设置、界面与初始化
      ======================================================================= */
 
+  // BUFF 栏固定定义：只有这四种图标可能出现；顺手牵羊是一次性技能，永远不显示。
+  const BUFF_BAR_DEFS = Object.freeze({
+    haste: { glyph: '疾', label: '轻身术' },
+    heal: { glyph: '桃', label: '桃' },
+    blood: { glyph: '血', label: '嗜血' },
+    stun: { glyph: '晕', label: '眩晕' },
+  });
+
+  // 当前增益/减益列表：嗜血、桃、轻身术为增益；眩晕为减益。
+  function buffEntries(fighter) {
+    if (!fighter) return [];
+    const list = [];
+    if (fighter.speedBoostTimer > 0) {
+      list.push({ kind: 'haste', seconds: fighter.speedBoostTimer });
+    }
+    if (fighter.healRemaining > 0) {
+      list.push({ kind: 'heal', seconds: fighter.healRemaining });
+    }
+    if (fighter.damageBoostTimer > 0) {
+      list.push({ kind: 'blood', seconds: fighter.damageBoostTimer });
+    }
+    if (fighter.stunRemaining > 0) {
+      list.push({ kind: 'stun', seconds: fighter.stunRemaining });
+    }
+    return list;
+  }
+
+  function renderBuffBar(container, fighter) {
+    if (!container) return;
+    // 图标与文字只从固定定义表取，顺手牵羊等一次性技能不可能出现在这里。
+    const entries = buffEntries(fighter)
+      .filter((entry) => Object.prototype.hasOwnProperty.call(BUFF_BAR_DEFS, entry.kind))
+      .map((entry) => {
+        const def = BUFF_BAR_DEFS[entry.kind];
+        return { kind: entry.kind, seconds: entry.seconds, glyph: def.glyph, label: def.label };
+      });
+    const signature = `${entries.length}|${entries
+      .map((entry) => `${entry.kind}:${Math.ceil(entry.seconds)}`)
+      .join('|')}`;
+    if (container.dataset.signature === signature) return;
+    container.dataset.signature = signature;
+    if (entries.length === 0) {
+      container.textContent = '';
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    for (const entry of entries) {
+      const chip = document.createElement('span');
+      chip.className = 'buff-chip';
+      chip.dataset.kind = entry.kind;
+      chip.title = `${entry.label} · ${entry.seconds.toFixed(1)} 秒`;
+      const glyph = document.createElement('span');
+      glyph.className = 'buff-glyph';
+      glyph.textContent = entry.glyph;
+      const time = document.createElement('span');
+      time.className = 'buff-time';
+      time.textContent = `${Math.ceil(entry.seconds)}s`;
+      chip.append(glyph, time);
+      fragment.appendChild(chip);
+    }
+    container.textContent = '';
+    container.appendChild(fragment);
+  }
+
   function updateHud(force = false) {
     if (!game.player || !game.enemy) return;
     const player = game.player;
@@ -5441,52 +5960,36 @@
     setText(dom.enemyHpText, `${Math.ceil(enemy.hp)} / ${enemy.maxHp}`);
     setText(dom.playerManaText, `${Math.floor(player.mana)} / ${player.maxMana}`);
     setText(dom.enemyManaText, `${Math.floor(enemy.mana)} / ${enemy.maxMana}`);
-    setText(dom.playerMeleeCombo, `${player.meleeCombo}`);
-    setText(dom.enemyMeleeCombo, `${enemy.meleeCombo}`);
-    setText(dom.playerRangedCombo, `${player.rangedCombo}`);
-    setText(dom.enemyRangedCombo, `${enemy.rangedCombo}`);
-
-    dom.playerEmpower.textContent = player.empowered ? '闪避强化 · 待发' : '闪避强化 · 无';
-    dom.enemyEmpower.textContent = enemy.empowered ? '闪避强化 · 待发' : '闪避强化 · 无';
-    dom.playerEmpower.classList.toggle('is-active', player.empowered);
-    dom.enemyEmpower.classList.toggle('is-active', enemy.empowered);
-
-    dom.playerExhaust.hidden = !player.exhausted;
-    dom.enemyExhaust.hidden = !enemy.exhausted;
-    dom.playerExhaust.classList.toggle('is-active', player.exhausted);
-    dom.enemyExhaust.classList.toggle('is-active', enemy.exhausted);
-
-    dom.playerMeditate.hidden = !player.meditating;
-    dom.enemyMeditate.hidden = !enemy.meditating;
-    dom.playerMeditate.classList.toggle('is-active', player.meditating);
-    dom.enemyMeditate.classList.toggle('is-active', enemy.meditating);
-
-    dom.playerPanel.classList.toggle('is-meditating', player.meditating);
-    dom.enemyPanel.classList.toggle('is-meditating', enemy.meditating);
-    dom.playerPanel.classList.toggle('is-exhausted', player.exhausted);
-    dom.enemyPanel.classList.toggle('is-exhausted', enemy.exhausted);
+    renderBuffBar(dom.playerBuffs, player);
+    renderBuffBar(dom.enemyBuffs, enemy);
 
     setText(
       dom.playerState,
       player.hp <= 0
         ? '道消'
-        : player.meditating
-          ? '入定'
-          : player.exhausted
-            ? '枯竭'
-            : player.empowered
-              ? '剑意盈袖'
-              : player.dodgeRemaining > 0
-                ? '闪身'
-                : '凝神'
+        : player.stunRemaining > 0
+          ? '眩晕'
+          : player.throwRemaining > 0
+            ? '被掷'
+            : player.rootTimer > 0
+              ? '打坐'
+            : player.dodgeRemaining > 0
+              ? '闪身'
+              : player.healRemaining > 0
+                ? '回春'
+                : player.speedBoostTimer > 0
+                  ? '疾行'
+                  : '凝神'
     );
     let enemyStateText = '观势';
     if (enemy.hp <= 0) {
       enemyStateText = '道消';
-    } else if (enemy.meditating) {
-      enemyStateText = '入定';
-    } else if (enemy.exhausted) {
-      enemyStateText = '枯竭';
+    } else if (enemy.stunRemaining > 0) {
+      enemyStateText = '眩晕';
+    } else if (enemy.throwRemaining > 0) {
+      enemyStateText = '被掷';
+    } else if (enemy.rootTimer > 0) {
+      enemyStateText = '打坐';
     } else if (game.ai) {
       switch (game.ai.mode) {
         case 'pursue':
@@ -5504,9 +6007,6 @@
         case 'evade':
           enemyStateText = '游斗';
           break;
-        case 'meditate':
-          enemyStateText = '入定';
-          break;
         default:
           enemyStateText = '观势';
       }
@@ -5517,8 +6017,7 @@
       const onlineState = (fighter, isLocal) => {
         if (!fighter) return '观势';
         if (fighter.hp <= 0) return '道消';
-        if (fighter.meditating) return '入定';
-        if (fighter.exhausted) return '枯竭';
+        if (fighter.stunRemaining > 0) return '眩晕';
         if (fighter.dodgeRemaining > 0) return '闪身';
         return isLocal ? '斗法' : '道友';
       };
@@ -5526,89 +6025,11 @@
       setText(dom.enemyState, onlineState(enemy, isOnlineGuest()));
     }
 
-    const meleeCost = getBaseMeleeCost(local);
-    const orbCost = getBaseOrbCost(local);
-    const meleeDamage = local.empowered ? CONFIG.meleeDamage * 2 : CONFIG.meleeDamage;
-    const orbDamage = local.empowered ? CONFIG.orbDamage * 2 : CONFIG.orbDamage;
-    setText(
-      dom.meleeSub,
-      local.empowered
-        ? `强化 · 0 灵 · ${meleeDamage} 伤害`
-        : `耗灵 ${formatCost(meleeCost)} · ${CONFIG.meleeDamage} 伤害`
-    );
-    setText(
-      dom.orbSub,
-      local.empowered
-        ? `强化 · 0 灵 · ${orbDamage} 伤害`
-        : orbCost === 0
-          ? `免灵 · ${CONFIG.orbDamage} 伤害 · 前2发`
-          : `耗灵 ${formatCost(orbCost)} · ${CONFIG.orbDamage} 伤害`
-    );
-
-    updateSkillButton(dom.skillButtons.melee, {
-      cooldown: local.meleeCooldown,
-      maxCooldown: CONFIG.meleeCooldown,
-      readyText: '就绪',
-      active: Boolean(local.swing),
-      unaffordable: !local.empowered && local.mana < meleeCost,
-      empowered: local.empowered,
-    });
-    setText(dom.meleeCd, local.meleeCooldown > 0 ? `${local.meleeCooldown.toFixed(1)}s` : '就绪');
-
-    updateSkillButton(dom.skillButtons.orb, {
-      cooldown: local.orbCooldown,
-      maxCooldown: CONFIG.orbCooldown,
-      readyText: '就绪',
-      active: false,
-      unaffordable: !local.empowered && local.mana < orbCost,
-      empowered: local.empowered,
-    });
-    setText(dom.orbCd, local.orbCooldown > 0 ? `${local.orbCooldown.toFixed(1)}s` : '就绪');
-
-    updateSkillButton(dom.skillButtons.dodge, {
-      cooldown: local.dodgeCooldown,
-      maxCooldown: CONFIG.dodgeCooldown,
-      readyText: local.empowered ? '强化待发' : '就绪',
-      active: local.dodgeRemaining > 0,
-      ready: local.dodgeCooldown <= 0.001 && local.dodgeRemaining <= 0,
-      unaffordable: false,
-      empowered: local.empowered,
-    });
-    setText(
-      dom.dodgeCd,
-      local.dodgeRemaining > 0
-        ? '冲刺'
-        : local.dodgeCooldown > 0
-          ? `${local.dodgeCooldown.toFixed(1)}s`
-          : '就绪'
-    );
-    setText(
-      dom.dodgeSub,
-      local.dodgeRemaining > 0 ? '无敌冲刺 · 残影' : local.empowered ? '强化已备 · 下一击 ×2' : '贴地冲刺 · 无敌'
-    );
-
-    updateSkillButton(dom.skillButtons.meditate, {
-      cooldown: 0,
-      maxCooldown: CONFIG.meditateCooldown,
-      readyText: '打坐中',
-      active: local.meditating,
-      ready: !local.meditating && local.meditateCooldown <= 0.001,
-      unaffordable: false,
-      empowered: false,
-      noSweep: local.meditating,
-    });
-    if (local.meditating) {
-      setText(dom.meditateCd, '+20/s');
-      setText(dom.meditateSub, '回灵 20 / 秒 · 出招即醒');
-      dom.skillButtons.meditate.style.setProperty('--cd', '0');
-      dom.skillButtons.meditate.querySelector('.cooldown-sweep').style.height = '0%';
-    } else {
-      setText(dom.meditateCd, local.meditateCooldown > 0 ? `${local.meditateCooldown.toFixed(1)}s` : '就绪');
-      setText(dom.meditateSub, '回灵 20 / 秒 · 冷却 5 秒');
-      dom.skillButtons.meditate.classList.toggle('is-cooling', local.meditateCooldown > 0);
-      const sweep = dom.skillButtons.meditate.querySelector('.cooldown-sweep');
-      sweep.style.height = `${clamp(local.meditateCooldown / CONFIG.meditateCooldown, 0, 1) * 100}%`;
-    }
+    setText(dom.playerEssenceChip, `${player.essence}`);
+    setText(dom.enemyEssenceChip, `${enemy.essence}`);
+    updateQuickActions(local);
+    updateCardHud(local);
+    updateStealPlusBadges();
 
     if (game.online.active && game.online.code) {
       setText(dom.memoryNote, `联机 · 房间 ${game.online.code}`);
@@ -5625,27 +6046,834 @@
     }
   }
 
-  function formatCost(value) {
-    if (!Number.isFinite(value)) return '∞';
-    if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
-    return `${Math.round(value)}`;
+  /* ------------------------------ 卡牌与精魄 ------------------------------ */
+
+  function cardById(id) {
+    return CARD_LIBRARY[id] || null;
   }
 
-  function updateSkillButton(button, options) {
-    if (!button) return;
-    const sweep = button.querySelector('.cooldown-sweep');
-    const cooling = options.cooldown > 0.001 && !options.noSweep;
-    button.classList.toggle('is-cooling', cooling);
-    button.classList.toggle('is-active', Boolean(options.active));
-    button.classList.toggle('is-ready-glow', Boolean(options.ready));
-    button.classList.toggle('is-unaffordable', Boolean(options.unaffordable));
-    button.classList.toggle('is-empowered', Boolean(options.empowered));
-    if (sweep) {
-      sweep.style.height = `${clamp(options.cooldown / options.maxCooldown, 0, 1) * 100}%`;
+  function ensureEssencePips() {
+    if (!dom.essencePips || dom.essencePips.children.length === CONFIG.essenceMax) return;
+    dom.essencePips.textContent = '';
+    for (let i = 0; i < CONFIG.essenceMax; i += 1) {
+      const pip = document.createElement('i');
+      pip.className = 'essence-pip';
+      dom.essencePips.appendChild(pip);
     }
-    if (!cooling && !options.noSweep) {
-      button.style.setProperty('--cd', '0');
+  }
+
+  function shuffleArray(list) {
+    for (let i = list.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const temp = list[i];
+      list[i] = list[j];
+      list[j] = temp;
     }
+    return list;
+  }
+
+  function initCards() {
+    ensureEssencePips();
+    // 每局开始时把双方牌库重新洗牌；每个槽位预抽一张「下一张」，出牌后由它顶上。
+    game.cards = { deck: shuffleArray(CARD_DECK.slice()), hand: [], preview: [] };
+    game.enemyCards = { deck: shuffleArray(CARD_DECK_AI.slice()), hand: [], preview: [] };
+    for (let i = 0; i < CARD_HAND_SIZE; i += 1) {
+      if (game.cards.deck.length > 0) game.cards.hand.push(game.cards.deck.shift());
+      if (game.enemyCards.deck.length > 0) game.enemyCards.hand.push(game.enemyCards.deck.shift());
+    }
+    for (let i = 0; i < CARD_HAND_SIZE; i += 1) {
+      game.cards.preview.push(game.cards.deck.length > 0 ? game.cards.deck.shift() : null);
+      game.enemyCards.preview.push(game.enemyCards.deck.length > 0 ? game.enemyCards.deck.shift() : null);
+    }
+    if (game.player) game.player.stealPlusTimers = [];
+    if (game.enemy) game.enemy.stealPlusTimers = [];
+    renderCardHand();
+  }
+
+  function handState(fighter) {
+    return fighter && fighter.team === 'enemy' ? game.enemyCards : game.cards;
+  }
+
+  function localCardState() {
+    return isOnlineGuest() ? game.enemyCards : game.cards;
+  }
+
+  function otherFighter(fighter) {
+    return fighter === game.player ? game.enemy : game.player;
+  }
+
+  // 可被顺手牵羊偷走的增益：嗜血、桃、轻身术。
+  function hasStealableBuff(fighter) {
+    return Boolean(
+      fighter &&
+      (fighter.speedBoostTimer > 0 || fighter.healRemaining > 0 || fighter.damageBoostTimer > 0)
+    );
+  }
+
+  // 随机偷一个增益：从对手身上移除，并在自己身上以「完整持续时间」重新生效（会重置持续时间）。
+  // 标记某个增益「刚刚获得」，顺手牵羊按这个序号偷最新拿到的那个。
+  function markBuffApplied(fighter, kind) {
+    if (!fighter || !fighter.buffAppliedAt) return;
+    game.buffSerial += 1;
+    fighter.buffAppliedAt[kind] = game.buffSerial;
+  }
+
+  function stealOneBuff(fighter) {
+    const opponent = otherFighter(fighter);
+    if (!opponent) return null;
+    const options = [];
+    if (opponent.speedBoostTimer > 0) options.push('speed');
+    if (opponent.healRemaining > 0) options.push('heal');
+    if (opponent.damageBoostTimer > 0) options.push('blood');
+    if (options.length === 0) return null;
+    // 固定偷「最新获得」的增益；时间序号相同（理论上不会）时按顺序取第一个。
+    let pick = options[0];
+    let newest = -1;
+    for (const kind of options) {
+      const appliedAt = (opponent.buffAppliedAt && opponent.buffAppliedAt[kind]) || 0;
+      if (appliedAt > newest) {
+        newest = appliedAt;
+        pick = kind;
+      }
+    }
+    if (pick === 'speed') {
+      fighter.speedBoostTimer = CARD_LIBRARY.wind.duration;
+      opponent.speedBoostTimer = 0;
+      markBuffApplied(fighter, 'speed');
+      return '轻身术';
+    }
+    if (pick === 'heal') {
+      fighter.healRemaining = CARD_LIBRARY.heal.duration;
+      fighter.healRate = CARD_LIBRARY.heal.healPerSecond;
+      opponent.healRemaining = 0;
+      markBuffApplied(fighter, 'heal');
+      return '桃';
+    }
+    fighter.damageBoostTimer = CARD_LIBRARY.blood.duration;
+    opponent.damageBoostTimer = 0;
+    markBuffApplied(fighter, 'blood');
+    return '嗜血';
+  }
+
+  function canPlayCard(fighter, card) {
+    if (!fighter || !card || !canUseCards(fighter) || fighter.essence < card.cost) return false;
+    // 桃一局最多 3 次。
+    if (card.id === 'heal' && fighter.healUses >= CONFIG.healUsesPerMatch) return false;
+    // 顺手牵羊：对手没有增益时不能出。
+    if ((card.id === 'steal' || card.id === 'stealPlus') && !hasStealableBuff(otherFighter(fighter))) return false;
+    return true;
+  }
+
+  function renderCardHand() {
+    if (!dom.cardHand) return;
+    const state = localCardState();
+    const hand = state && Array.isArray(state.hand) ? state.hand : [];
+    const player = getLocalFighter();
+    const signature = hand.join('|');
+    if (game.cardDrag || game.online.cardSignature === signature) return;
+    game.online.cardSignature = signature;
+    dom.cardHand.textContent = '';
+    const fragment = document.createDocumentFragment();
+    hand.forEach((id, index) => {
+      const card = cardById(id);
+      if (!card) return;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'game-card';
+      button.dataset.card = id;
+      button.dataset.slot = `${index}`;
+      if (card.temporary) button.classList.add('is-temporary');
+      button.style.setProperty('--tone', card.tone);
+      const healExhausted = card.id === 'heal' && player && player.healUses >= CONFIG.healUsesPerMatch;
+      const stealBlocked =
+        (card.id === 'steal' || card.id === 'stealPlus') && player && !hasStealableBuff(otherFighter(player));
+      button.setAttribute(
+        'aria-label',
+        `${card.name}，${card.cost} 费：${card.text}${healExhausted ? '（本局已用尽）' : ''}`
+      );
+      if (!player || player.essence < card.cost || game.mode !== 'battle' || healExhausted || stealBlocked) {
+        button.classList.add('is-unaffordable');
+      }
+      const cost = document.createElement('span');
+      cost.className = 'card-cost';
+      cost.textContent = `${card.cost}`;
+      const art = document.createElement('span');
+      art.className = 'card-art';
+      art.textContent = card.art;
+      const name = document.createElement('span');
+      name.className = 'card-name';
+      name.textContent = card.name;
+      const text = document.createElement('span');
+      text.className = 'card-text';
+      text.textContent =
+        card.id === 'heal' && player
+          ? `${card.text}（已用 ${player.healUses}/${CONFIG.healUsesPerMatch}）`
+          : card.text;
+      button.append(cost, art, name, text);
+      if (card.temporary) {
+        const timer = document.createElement('span');
+        timer.className = 'card-timer';
+        button.appendChild(timer);
+      }
+      fragment.appendChild(button);
+    });
+    dom.cardHand.appendChild(fragment);
+  }
+
+  function updateQuickActions(local) {
+    if (!local || !dom.dodgeBtn) return;
+    const ready = local.dodgeCooldown <= 0.001 && local.dodgeRemaining <= 0;
+    dom.dodgeBtn.classList.toggle('is-empty', !ready);
+    setText(
+      dom.dodgeCd,
+      local.dodgeRemaining > 0
+        ? '冲刺'
+        : local.dodgeCooldown > 0
+          ? `${local.dodgeCooldown.toFixed(1)}s`
+          : '就绪'
+    );
+
+    const canGather = local.essence < CONFIG.essenceMax && local.mana >= CONFIG.spiritGatherMana;
+    dom.spiritBtn.classList.toggle('is-empty', !canGather);
+    setText(dom.spiritSub, `100 灵力 → 1 精魄 · 当前 ${Math.floor(local.mana)}`);
+    setText(
+      dom.spiritCd,
+      local.essence >= CONFIG.essenceMax ? '精魄满' : canGather ? '就绪' : '灵力不足'
+    );
+
+    const counterReady = (local.counterCooldown || 0) <= 0.001;
+    if (dom.counterBtn) dom.counterBtn.classList.toggle('is-empty', !counterReady);
+    setText(dom.counterCd, counterReady ? '就绪' : `${(local.counterCooldown || 0).toFixed(1)}s`);
+  }
+
+  function updateStealPlusBadges() {
+    if (!dom.cardHand) return;
+    const local = getLocalFighter();
+    if (!local) return;
+    const timers = Array.isArray(local.stealPlusTimers) ? local.stealPlusTimers : [];
+    for (const element of dom.cardHand.querySelectorAll('.game-card')) {
+      if (element.dataset.card !== 'stealPlus') continue;
+      const slot = Number(element.dataset.slot);
+      const badge = element.querySelector('.card-timer');
+      if (!badge) continue;
+      const timer = timers.find((entry) => entry.slot === slot);
+      badge.textContent = timer ? `${Math.max(0, timer.remaining).toFixed(1)}s` : '';
+    }
+  }
+
+  function updateCardHud(local) {
+    ensureEssencePips();
+    setText(dom.essenceValue, `${local ? local.essence : 0}`);
+    if (dom.essencePips) {
+      const pips = dom.essencePips.children;
+      for (let i = 0; i < pips.length; i += 1) {
+        pips[i].classList.toggle('is-filled', Boolean(local) && i < local.essence);
+      }
+    }
+    if (!localCardState()) initCards();
+    if (!dom.cardHand) return;
+    for (const element of dom.cardHand.querySelectorAll('.game-card')) {
+      const card = cardById(element.dataset.card);
+      const healExhausted = Boolean(
+        card && card.id === 'heal' && local && local.healUses >= CONFIG.healUsesPerMatch
+      );
+      const stealBlocked = Boolean(
+        card &&
+          (card.id === 'steal' || card.id === 'stealPlus') &&
+          local &&
+          !hasStealableBuff(otherFighter(local))
+      );
+      const affordable = Boolean(
+        local &&
+          card &&
+          local.essence >= card.cost &&
+          game.mode === 'battle' &&
+          !healExhausted &&
+          !stealBlocked
+      );
+      element.classList.toggle('is-unaffordable', !affordable);
+    }
+  }
+
+  function addStealPlusTimer(fighter, slot) {
+    if (!fighter) return;
+    if (!Array.isArray(fighter.stealPlusTimers)) fighter.stealPlusTimers = [];
+    fighter.stealPlusTimers = fighter.stealPlusTimers.filter((timer) => timer.slot !== slot);
+    fighter.stealPlusTimers.push({ slot, remaining: CONFIG.stealPlusDuration });
+  }
+
+  function removeStealPlusTimer(fighter, slot) {
+    if (!fighter || !Array.isArray(fighter.stealPlusTimers)) return;
+    fighter.stealPlusTimers = fighter.stealPlusTimers.filter((timer) => timer.slot !== slot);
+  }
+
+  function shiftStealPlusTimers(fighter, removedSlot) {
+    if (!fighter || !Array.isArray(fighter.stealPlusTimers)) return;
+    for (const timer of fighter.stealPlusTimers) {
+      if (timer.slot > removedSlot) timer.slot -= 1;
+    }
+  }
+
+  // 顺手牵羊+ 到期：销毁临时牌，并从牌库里随机刷一张牌补到同一槽位。
+  function expireStealPlus(fighter, slot) {
+    const state = handState(fighter);
+    if (!state) return;
+    const timers = Array.isArray(fighter.stealPlusTimers) ? fighter.stealPlusTimers : [];
+    const timerIndex = timers.findIndex((timer) => timer.slot === slot);
+    if (timerIndex >= 0) timers.splice(timerIndex, 1);
+    if (!Array.isArray(state.hand) || state.hand[slot] !== 'stealPlus') return;
+
+    if (state.deck.length > 0) {
+      const pick = Math.floor(Math.random() * state.deck.length);
+      state.hand[slot] = state.deck.splice(pick, 1)[0];
+    } else {
+      state.hand.splice(slot, 1);
+      if (Array.isArray(state.preview)) state.preview.splice(slot, 1);
+      shiftStealPlusTimers(fighter, slot);
+    }
+
+    if (fighter === game.player) {
+      renderCardHand();
+      showToast('顺手牵羊+ 已销毁，刷新一张牌', '', 1100);
+      if (
+        game.cardDrag &&
+        game.cardDrag.element &&
+        game.cardDrag.element.dataset.card === 'stealPlus' &&
+        Number(game.cardDrag.element.dataset.slot) === slot
+      ) {
+        if (game.cardDrag.ghost) game.cardDrag.ghost.remove();
+        game.cardDrag.element.classList.remove('is-dragging');
+        game.cardDrag = null;
+      }
+    }
+  }
+
+  function consumeCardFromHand(fighter, cardId) {
+    const state = handState(fighter);
+    if (!state) return;
+    const index = state.hand.indexOf(cardId);
+    if (index < 0) return;
+    const previews = Array.isArray(state.preview) ? state.preview : null;
+
+    if (cardId === 'stealPlus') {
+      // 临时牌销毁，绝不进入牌库；同槽位按正常规则由预抽牌顶上。
+      removeStealPlusTimer(fighter, index);
+      const promoted = previews ? previews[index] : null;
+      if (promoted) {
+        state.hand[index] = promoted;
+      } else {
+        state.hand.splice(index, 1);
+        shiftStealPlusTimers(fighter, index);
+      }
+      if (previews) {
+        if (promoted) {
+          previews[index] = state.deck.length > 0 ? state.deck.shift() : null;
+        } else {
+          previews.splice(index, 1);
+        }
+      }
+    } else {
+      // 打出的普通牌沉到牌库底。
+      state.deck.push(cardId);
+      if (cardId === 'steal') {
+        // 顺手牵羊发动后，同一槽位留下临时牌「顺手牵羊+」；预抽位保留。
+        state.hand[index] = 'stealPlus';
+        addStealPlusTimer(fighter, index);
+      } else {
+        const promoted = previews ? previews[index] : null;
+        if (promoted) {
+          // 每个槽位有自己的「下一张」，出牌后由它顶上。
+          state.hand[index] = promoted;
+        } else {
+          state.hand.splice(index, 1);
+          shiftStealPlusTimers(fighter, index);
+        }
+        if (previews) {
+          if (promoted) {
+            previews[index] = state.deck.length > 0 ? state.deck.shift() : null;
+          } else {
+            previews.splice(index, 1);
+          }
+        }
+      }
+    }
+    if (fighter === game.player) renderCardHand();
+  }
+
+  // 把某张牌从本局的手牌、预告与牌库里彻底移除（下一局 initCards 会重新加载整套卡组）。
+  function purgeCardFromPool(fighter, cardId) {
+    const state = handState(fighter);
+    if (!state) return;
+    for (let i = state.deck.length - 1; i >= 0; i -= 1) {
+      if (state.deck[i] === cardId) state.deck.splice(i, 1);
+    }
+    const previews = Array.isArray(state.preview) ? state.preview : null;
+    const keptCards = [];
+    const keptPreviews = [];
+    const removedIndices = [];
+    for (let i = 0; i < state.hand.length; i += 1) {
+      if (state.hand[i] === cardId) {
+        removedIndices.push(i);
+        continue;
+      }
+      const preview = previews ? previews[i] : null;
+      keptCards.push(state.hand[i]);
+      if (previews) {
+        // 预告位若也是这张牌，就从牌库补一张新的预告。
+        keptPreviews.push(
+          preview && preview !== cardId ? preview : state.deck.length > 0 ? state.deck.shift() : null
+        );
+      }
+    }
+    state.hand = keptCards;
+    if (previews) state.preview = keptPreviews;
+    if (Array.isArray(fighter.stealPlusTimers)) {
+      fighter.stealPlusTimers = fighter.stealPlusTimers
+        .map((timer) => ({
+          ...timer,
+          slot: timer.slot - removedIndices.filter((i) => i < timer.slot).length,
+        }))
+        .filter((timer) => state.hand[timer.slot] === 'stealPlus');
+    }
+    if (fighter === game.player) renderCardHand();
+  }
+
+  function playCard(fighter, card, targetPoint) {
+    if (!fighter || !card || !canPlayCard(fighter, card)) {
+      if (fighter === game.player) {
+        if (card && card.id === 'heal' && fighter.healUses >= CONFIG.healUsesPerMatch) {
+          showToast('桃本局已用尽（最多 3 次）', 'warn', 1200);
+        } else if (card && (card.id === 'steal' || card.id === 'stealPlus')) {
+          showToast('对手没有可偷取的增益（无事发生）', 'warn', 1100);
+        } else {
+          showToast(playerEssenceShort(fighter, card) ? '精魄不足' : '此刻无法出牌', 'warn', 1100);
+        }
+      }
+      return false;
+    }
+    if ((card.id === 'steal' || card.id === 'stealPlus') && !hasStealableBuff(otherFighter(fighter))) {
+      if (fighter === game.player) showToast('对手没有可偷取的增益（无事发生）', 'warn', 1100);
+      return false;
+    }
+    fighter.essence -= card.cost;
+    fighter.regenBlocked = CONFIG.regenPauseAfterAttack;
+    fighter.meditationTimer = 0;
+    fighter.stats.cardsPlayed += 1;
+    if (fighter === game.player) game.match.cardsPlayed += 1;
+    if (card.id === 'heal') fighter.healUses += 1;
+    let consume = true;
+
+    if (card.id === 'greatsword') {
+      const x = clamp(targetPoint ? targetPoint.x : fighter.x, world.play.x, world.play.x + world.play.w);
+      const y = clamp(targetPoint ? targetPoint.y : fighter.y, world.play.y, world.play.y + world.play.h);
+      game.giantSwords.push({
+        x,
+        y,
+        radius: card.radius * world.scale,
+        delay: card.delay,
+        elapsed: 0,
+        struck: false,
+        life: 1.5,
+        team: fighter.team,
+        damage: card.damage,
+        owner: fighter,
+      });
+      spawnRipple(x, y, '#ffe0a0', 0.5, card.radius * world.scale);
+      spawnFloater(x, y - 16 * world.scale, '巨剑术', '#ffe9b0', 0.8, 14);
+    } else if (card.id === 'wind') {
+      fighter.speedBoostTimer = card.duration;
+      markBuffApplied(fighter, 'speed');
+      // 轻身术可以解除一次眩晕。
+      if (fighter.stunRemaining > 0) {
+        fighter.stunRemaining = 0;
+        spawnFloater(fighter.x, fighter.y - 74 * world.scale, '解晕', '#ffe6a8', 0.8, 14);
+        if (fighter === game.player) showToast('轻身术解除了眩晕', '', 1000);
+      }
+      spawnRipple(fighter.x, fighter.y, '#9fe8d6', 0.45, fighter.radius * 2);
+      spawnFloater(fighter.x, fighter.y - 58 * world.scale, '轻身', '#b8f0e0', 0.9, 14);
+    } else if (card.id === 'heal') {
+      fighter.healRemaining = card.duration;
+      fighter.healRate = card.healPerSecond;
+      markBuffApplied(fighter, 'heal');
+      spawnRipple(fighter.x, fighter.y, '#f0b6b6', 0.45, fighter.radius * 2);
+      spawnFloater(fighter.x, fighter.y - 58 * world.scale, '桃', '#ffd0d0', 0.9, 14);
+    } else if (card.id === 'goldfinger') {
+      // 金手指：当前手牌与预告全部洗回牌库，再重新摸满手牌与预告。
+      // 顺手牵羊+ 是临时牌，绝不进入牌库。
+      const state = handState(fighter);
+      state.deck.push(...state.hand.filter((id) => id !== 'stealPlus'));
+      if (Array.isArray(state.preview)) {
+        state.deck.push(...state.preview.filter(Boolean));
+        state.preview.length = 0;
+      }
+      state.hand.length = 0;
+      fighter.stealPlusTimers = [];
+      shuffleArray(state.deck);
+      while (state.hand.length < CARD_HAND_SIZE && state.deck.length > 0) {
+        state.hand.push(state.deck.shift());
+      }
+      if (Array.isArray(state.preview)) {
+        while (state.preview.length < CARD_HAND_SIZE) {
+          state.preview.push(state.deck.length > 0 ? state.deck.shift() : null);
+        }
+      }
+      consume = false;
+      spawnRipple(fighter.x, fighter.y, '#e6c86a', 0.55, fighter.radius * 2.4);
+      spawnFloater(fighter.x, fighter.y - 58 * world.scale, '换牌', '#ffe9b0', 0.9, 14);
+      if (fighter === game.player) renderCardHand();
+    } else if (card.id === 'stillness') {
+      fighter.rootTimer = card.duration;
+      fighter.rootReward = true;
+      fighter.meditationTimer = card.duration;
+      fighter.castDuration = card.duration;
+      fighter.moving = false;
+      spawnRipple(fighter.x, fighter.y, '#9fb6d8', 0.55, fighter.radius * 2);
+      spawnFloater(fighter.x, fighter.y - 58 * world.scale, '打坐', '#c8d8f0', 0.9, 14);
+    } else if (card.id === 'blink') {
+      const x = clamp(
+        targetPoint ? targetPoint.x : fighter.x,
+        world.play.x + fighter.radius,
+        world.play.x + world.play.w - fighter.radius
+      );
+      const y = clamp(
+        targetPoint ? targetPoint.y : fighter.y,
+        world.play.y + fighter.radius,
+        world.play.y + world.play.h - fighter.radius
+      );
+      spawnDust(fighter.x, fighter.y, 12, fighter.palette.robeLight);
+      addAfterimage(fighter);
+      spawnRipple(fighter.x, fighter.y, '#b7a4e8', 0.45, fighter.radius * 1.8);
+      fighter.x = x;
+      fighter.y = y;
+      fighter.prevX = x;
+      fighter.prevY = y;
+      resolveObstaclePenetration(fighter);
+      clampFighterToArena(fighter);
+      spawnDust(fighter.x, fighter.y, 10, fighter.palette.robeLight);
+      spawnRipple(fighter.x, fighter.y, '#d9c8ff', 0.5, fighter.radius * 2);
+      spawnFloater(fighter.x, fighter.y - 58 * world.scale, '缩地', '#d9c8ff', 0.9, 14);
+    } else if (card.id === 'blood') {
+      fighter.damageBoostTimer = card.duration;
+      markBuffApplied(fighter, 'blood');
+      spawnRipple(fighter.x, fighter.y, '#d96a6a', 0.5, fighter.radius * 2.2);
+      spawnFloater(fighter.x, fighter.y - 58 * world.scale, '攻击翻倍', '#ffb0a0', 0.9, 14);
+    } else if (card.id === 'steal' || card.id === 'stealPlus') {
+      const stolen = stealOneBuff(fighter);
+      if (!stolen) return false;
+      spawnRipple(fighter.x, fighter.y, '#c9a7e8', 0.5, fighter.radius * 2.2);
+      spawnFloater(fighter.x, fighter.y - 58 * world.scale, `偷取·${stolen}`, '#e2c8ff', 0.9, 14);
+      if (fighter === game.player) showToast(`顺手牵羊：偷到${stolen}`, '', 1000);
+    } else if (card.id === 'hammer') {
+      const target = fighter === game.player ? game.enemy : game.player;
+      if (!target || target.hp <= 0) return false;
+      applyStun(target, CONFIG.stunDuration);
+      target.swing = null;
+      target.dodgeRemaining = 0;
+      target.moving = false;
+      spawnRipple(target.x, target.y, '#b8c8dc', 0.5, target.radius * 2.2);
+      spawnFloater(target.x, target.y - 58 * world.scale, `眩晕 ${CONFIG.stunDuration} 秒`, '#dce8ff', 0.9, 15);
+    }
+
+    if (consume) consumeCardFromHand(fighter, card.id);
+    // 桃用尽 3 次后从本局卡组移除，下一局重新加载。
+    if (card.id === 'heal' && fighter.healUses >= CONFIG.healUsesPerMatch) {
+      purgeCardFromPool(fighter, 'heal');
+    }
+    updateHud(true);
+    return true;
+  }
+
+  function playerEssenceShort(fighter, card) {
+    return Boolean(fighter && card && fighter.essence < card.cost);
+  }
+
+  function isPointInsideArena(x, y) {
+    const play = world.play;
+    return x >= play.x && x <= play.x + play.w && y >= play.y && y <= play.y + play.h;
+  }
+
+  // 单体指向卡（玄武锤等）需要拖到目标精灵身上。
+  function isPointOnEnemy(x, y) {
+    const enemy = game.enemy;
+    if (!enemy || enemy.hp <= 0) return false;
+    const dx = x - enemy.x;
+    const dy = y - (enemy.y - 20 * world.scale);
+    return Math.hypot(dx, dy) <= enemy.radius * 2.4;
+  }
+
+  function beginCardDrag(cardElement, event) {
+    if (game.mode !== 'battle' || game.paused || game.settingsOpen) return;
+    const card = cardById(cardElement.dataset.card);
+    const player = getLocalFighter();
+    const state = localCardState();
+    if (!card || !player || !state) return;
+    if (!canPlayCard(player, card)) {
+      showToast(
+        card.id === 'heal' && player.healUses >= CONFIG.healUsesPerMatch
+          ? '桃本局已用尽（最多 3 次）'
+          : player.essence < card.cost
+            ? '精魄不足'
+            : '此刻无法出牌',
+        'warn',
+        1200
+      );
+      return;
+    }
+    const rect = cardElement.getBoundingClientRect();
+    const ghost = cardElement.cloneNode(true);
+    ghost.classList.add('card-ghost');
+    ghost.classList.remove('is-dragging', 'is-unaffordable');
+    ghost.style.left = `${event.clientX}px`;
+    ghost.style.top = `${event.clientY}px`;
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.minHeight = `${rect.height}px`;
+    document.body.appendChild(ghost);
+    cardElement.classList.add('is-dragging');
+    game.cardDrag = {
+      id: card.id,
+      slot: Number(cardElement.dataset.slot),
+      ghost,
+      element: cardElement,
+    };
+  }
+
+  function updateCardDrag(event) {
+    if (!game.cardDrag || !game.cardDrag.ghost) return;
+    game.cardDrag.ghost.style.left = `${event.clientX}px`;
+    game.cardDrag.ghost.style.top = `${event.clientY}px`;
+  }
+
+  function finishCardDrag(event) {
+    const drag = game.cardDrag;
+    if (!drag) return;
+    game.cardDrag = null;
+    if (drag.ghost) drag.ghost.remove();
+    if (drag.element) drag.element.classList.remove('is-dragging');
+    const card = cardById(drag.id);
+    const player = getLocalFighter();
+    if (!card || !player) return;
+    // 在手牌区松开 = 撤回：这张牌留在原槽位，视为没有打出。
+    if (isPointInsideHandArea(event.clientX, event.clientY)) {
+      showToast('已放回手牌', '', 700);
+      return;
+    }
+    let target = null;
+    if (card.targeting === 'ground') {
+      if (!isPointInsideArena(event.clientX, event.clientY)) return;
+      target = { x: event.clientX, y: event.clientY };
+    } else if (card.targeting === 'enemy') {
+      if (!isPointOnEnemy(event.clientX, event.clientY)) {
+        showToast(`${card.name}需要拖到对手身上`, 'warn', 1100);
+        return;
+      }
+      target = { x: game.enemy.x, y: game.enemy.y };
+    } else {
+      target = { x: player.x, y: player.y };
+    }
+    if (isOnlineGuest()) {
+      sendGuestCardAction(drag.slot, card.id, target);
+      return;
+    }
+    playCard(player, card, target);
+  }
+
+  // 手牌区（卡牌行的外框，留一点容错）。
+  function isPointInsideHandArea(x, y) {
+    if (!dom.cardHand) return false;
+    const rect = dom.cardHand.getBoundingClientRect();
+    const pad = 14;
+    return x >= rect.left - pad && x <= rect.right + pad && y >= rect.top - pad && y <= rect.bottom + pad;
+  }
+
+  function playCardByIndex(index) {
+    if (game.mode !== 'battle' || game.paused || game.settingsOpen) return;
+    const state = localCardState();
+    const id = state && state.hand[index];
+    const card = cardById(id);
+    const player = getLocalFighter();
+    if (!card || !player) return;
+    if (!canPlayCard(player, card)) {
+      showToast(
+        card.id === 'heal' && player.healUses >= CONFIG.healUsesPerMatch
+          ? '桃本局已用尽（最多 3 次）'
+          : player.essence < card.cost
+            ? '精魄不足'
+            : '此刻无法出牌',
+        'warn',
+        1200
+      );
+      return;
+    }
+    const point =
+      card.targeting === 'ground'
+        ? {
+            x: clamp(input.mouseX, world.play.x, world.play.x + world.play.w),
+            y: clamp(input.mouseY, world.play.y, world.play.y + world.play.h),
+          }
+        : card.targeting === 'enemy' && game.enemy
+          ? { x: game.enemy.x, y: game.enemy.y }
+          : { x: player.x, y: player.y };
+    if (isOnlineGuest()) {
+      sendGuestCardAction(index, card.id, point);
+      return;
+    }
+    playCard(player, card, point);
+  }
+
+  function requestSpiritGather() {
+    if (isOnlineGuest()) {
+      sendGuestAction('gather', getGuestAimAngle(true));
+      return;
+    }
+    castSpiritGather(game.player);
+  }
+
+  function requestCounter() {
+    if (isOnlineGuest()) {
+      sendGuestAction('counter', getGuestAimAngle(true));
+      return;
+    }
+    if (!tryCounter(game.player)) warnPlayer('需在对方刀光期间反制', true);
+  }
+
+  /* ------------------------------ 巨剑术与增益 ------------------------------ */
+
+  function updateGiantSwords(dt) {
+    for (const sword of game.giantSwords) {
+      sword.elapsed += dt;
+      if (sword.struck || sword.elapsed < sword.delay) continue;
+      sword.struck = true;
+      game.shake = Math.max(game.shake, 14);
+      spawnRipple(sword.x, sword.y, '#ffe6b0', 0.6, sword.radius * 1.7);
+      spawnRipple(sword.x, sword.y, '#fff4d0', 0.34, sword.radius * 1.1);
+      spawnDust(sword.x, sword.y, 18, '#e9d8ad', 1.6);
+      const target = sword.team === 'player' ? game.enemy : game.player;
+      if (!target || target.hp <= 0) continue;
+      if (dist(sword.x, sword.y, target.x, target.y) > sword.radius + target.radius * 0.6) continue;
+      const didHit = damageFighter(target, sword.damage, {
+        source: 'sword',
+        attacker: sword.owner,
+        showText: true,
+      });
+      if (didHit) {
+        spawnInkSplash(target.x, target.y - 18 * world.scale, target.palette, 18);
+        spawnFloater(target.x, target.y - 46 * world.scale, '巨剑', '#ffe9b0', 0.85, 15);
+      }
+    }
+    game.giantSwords = game.giantSwords.filter((sword) => sword.elapsed < sword.delay + sword.life);
+  }
+
+  function drawGreatswordShape(scale) {
+    const length = 196 * scale;
+    const half = 16 * scale;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = 'rgba(255, 246, 220, 0.94)';
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(half * 0.58, -length * 0.2);
+    ctx.lineTo(half, -length * 0.82);
+    ctx.lineTo(-half, -length * 0.82);
+    ctx.lineTo(-half * 0.58, -length * 0.2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255, 255, 245, 0.9)';
+    ctx.fillRect(-half * 0.16, -length * 0.8, half * 0.32, length * 0.66);
+    ctx.fillStyle = 'rgba(214, 186, 122, 0.95)';
+    ctx.fillRect(-half * 1.9, -length * 0.87, half * 3.8, 9 * scale);
+    ctx.fillRect(-half * 0.24, -length, half * 0.48, length * 0.15);
+    ctx.restore();
+  }
+
+  function drawGiantSwords() {
+    for (const sword of game.giantSwords) {
+      const scale = world.scale;
+      const progress = clamp(sword.elapsed / sword.delay, 0, 1);
+      const faded = sword.struck ? clamp(1 - (sword.elapsed - sword.delay) / sword.life, 0, 1) : 1;
+      ctx.save();
+      ctx.translate(sword.x, sword.y);
+      ctx.globalAlpha = faded;
+      // 地面阵纹
+      ctx.strokeStyle = 'rgba(255, 222, 158, 0.78)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, sword.radius * (0.62 + progress * 0.38), sword.radius * 0.4 * (0.62 + progress * 0.38), 0, 0, TAU);
+      ctx.stroke();
+      ctx.setLineDash([6 * scale, 8 * scale]);
+      ctx.strokeStyle = 'rgba(200, 174, 116, 0.52)';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, sword.radius, sword.radius * 0.4, 0, 0, TAU);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // 巨剑
+      if (!sword.struck) {
+        const fall = 1 - progress;
+        ctx.translate(0, -sword.radius * 2.6 * fall);
+        drawGreatswordShape(scale);
+      } else {
+        const impact = clamp((sword.elapsed - sword.delay) / 0.18, 0, 1);
+        ctx.globalAlpha = faded * (1 - impact);
+        ctx.fillStyle = 'rgba(255, 240, 200, 0.6)';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, sword.radius * (1 + impact * 0.6), sword.radius * 0.4 * (1 + impact * 0.6), 0, 0, TAU);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawFighterBuffs(fighter) {
+    if (!fighter || fighter.hp <= 0) return;
+    const scale = world.scale;
+    ctx.save();
+    ctx.translate(fighter.x, fighter.y);
+    if (fighter.speedBoostTimer > 0) {
+      ctx.strokeStyle = `rgba(159, 232, 214, ${0.16 + 0.1 * Math.sin(game.ambientTime * 6)})`;
+      ctx.lineWidth = 1.4;
+      for (let i = 0; i < 3; i += 1) {
+        const offset = (game.ambientTime * 90 * scale + i * 22 * scale) % 44;
+        ctx.beginPath();
+        ctx.arc(0, -10 * scale, (18 + offset * 0.5) * scale, -0.9, 0.9);
+        ctx.stroke();
+      }
+    }
+    if (fighter.healRemaining > 0) {
+      ctx.strokeStyle = `rgba(240, 182, 182, ${0.2 + 0.12 * Math.sin(game.ambientTime * 5)})`;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, fighter.radius * 1.6, fighter.radius * 0.55, 0, 0, TAU);
+      ctx.stroke();
+    }
+    if (fighter.damageBoostTimer > 0) {
+      ctx.strokeStyle = `rgba(217, 106, 106, ${0.26 + 0.14 * Math.sin(game.ambientTime * 7)})`;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, fighter.radius * 1.75, fighter.radius * 0.6, 0, 0, TAU);
+      ctx.stroke();
+    }
+    if (fighter.rootTimer > 0) {
+      ctx.strokeStyle = `rgba(159, 182, 216, ${0.32 + 0.12 * Math.sin(game.ambientTime * 4)})`;
+      ctx.lineWidth = 1.6;
+      for (let i = 0; i < 4; i += 1) {
+        const angle = (i / 4) * TAU + Math.PI / 4;
+        const px = Math.cos(angle) * fighter.radius * 1.25;
+        const py = Math.sin(angle) * fighter.radius * 0.45;
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px * 0.5, py - 16 * scale);
+        ctx.stroke();
+      }
+    }
+    if (fighter.stunRemaining > 0) {
+      for (let i = 0; i < 3; i += 1) {
+        const angle = game.ambientTime * 5 + (i / 3) * TAU;
+        ctx.fillStyle = 'rgba(230, 240, 255, 0.85)';
+        ctx.beginPath();
+        ctx.arc(Math.cos(angle) * 16 * scale, -44 * scale + Math.sin(angle) * 5 * scale, 2.2 * scale, 0, TAU);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
   }
 
   function updateMemoryLabels() {
@@ -6097,6 +7325,26 @@
     });
   }
 
+  function sendGuestCardAction(slot, cardId, targetPoint) {
+    if (!isOnlineGuest() || game.mode !== 'battle' || game.paused) return;
+    let target = null;
+    if (targetPoint) {
+      target = {
+        x: (Number(targetPoint.x) - world.play.x) / Math.max(1, world.play.w),
+        y: (Number(targetPoint.y) - world.play.y) / Math.max(1, world.play.h),
+      };
+      target.x = clamp(target.x, 0, 1);
+      target.y = clamp(target.y, 0, 1);
+    }
+    sendOnlineRelay({
+      kind: 'action',
+      action: 'card',
+      slot: Number(slot),
+      cardId,
+      target,
+    });
+  }
+
   function handleGuestRelay(data) {
     if (!data || typeof data !== 'object' || !isOnlineHost()) return;
     if (data.kind === 'input') {
@@ -6112,7 +7360,7 @@
       return;
     }
     if (data.kind === 'action') {
-      const actions = ['melee', 'orb', 'dodge', 'meditate'];
+      const actions = ['melee', 'orb', 'dodge', 'gather', 'counter', 'card'];
       if (!actions.includes(data.action)) return;
       const angle = data.aim
         ? onlineDirToAngle(data.aim, game.online.remoteInput.aimAngle)
@@ -6120,7 +7368,21 @@
           ? data.angle
           : game.online.remoteInput.aimAngle;
       if (game.online.pendingActions.length < 8) {
-        game.online.pendingActions.push({ action: data.action, angle });
+        game.online.pendingActions.push({
+          action: data.action,
+          angle,
+          slot: Number.isFinite(data.slot) ? Math.floor(data.slot) : -1,
+          cardId: typeof data.cardId === 'string' ? data.cardId : '',
+          target:
+            data.target &&
+            Number.isFinite(data.target.x) &&
+            Number.isFinite(data.target.y)
+              ? {
+                  x: clamp(data.target.x, 0, 1),
+                  y: clamp(data.target.y, 0, 1),
+                }
+              : null,
+        });
       }
       return;
     }
@@ -6171,6 +7433,8 @@
     game.online.resultSent = false;
     game.online.rematchRequested = false;
     game.online.lastInputSentAt = 0;
+    game.online.lastOrbActionAt = 0;
+    game.online.cardSignature = '';
     game.online.lastSnapshotAt = 0;
     game.online.lastSnapshotReceivedAt = 0;
     game.online.pendingActions.length = 0;
@@ -6280,6 +7544,13 @@
         winnerTeam: game.winner ? game.winner.team : null,
         match: game.match,
         clashCount: game.clashCount,
+        enemyCards: game.enemyCards
+          ? {
+              hand: [...game.enemyCards.hand],
+              preview: Array.isArray(game.enemyCards.preview) ? [...game.enemyCards.preview] : [],
+            }
+          : null,
+        giantSwords: game.giantSwords.map(({ owner, ...sword }) => ({ ...sword })),
       },
     };
   }
@@ -6369,6 +7640,10 @@
       mapPoint(afterimage);
       if (Number.isFinite(afterimage.facing)) afterimage.facing = mapAngle(afterimage.facing);
     }
+    for (const sword of snapshot.giantSwords || []) {
+      mapPoint(sword);
+      if (Number.isFinite(sword.radius)) sword.radius *= ss;
+    }
     if (Number.isFinite(snapshot.shake)) snapshot.shake *= ss;
     return snapshot;
   }
@@ -6390,8 +7665,19 @@
     game.battleTime = Number(snapshot.time) || 0;
     game.match = snapshot.match || game.match;
     game.clashCount = Number(snapshot.clashCount) || 0;
+    game.giantSwords = Array.isArray(snapshot.giantSwords) ? snapshot.giantSwords : [];
+    if (snapshot.enemyCards) {
+      if (!game.enemyCards) game.enemyCards = { deck: [], hand: [], preview: [] };
+      game.enemyCards.hand = Array.isArray(snapshot.enemyCards.hand)
+        ? [...snapshot.enemyCards.hand]
+        : game.enemyCards.hand;
+      game.enemyCards.preview = Array.isArray(snapshot.enemyCards.preview)
+        ? [...snapshot.enemyCards.preview]
+        : game.enemyCards.preview;
+    }
     game.online.lastSnapshotReceivedAt = performance.now();
     game.online.lastAppliedSnapshotAt = game.online.lastSnapshotReceivedAt;
+    if (!game.cardDrag) renderCardHand();
   }
 
   function updateOnlineGuestView(dt) {
@@ -6442,27 +7728,59 @@
     game.online.lastInputSentAt = now;
     game.online.inputSeq += 1;
     const aimAngle = getGuestAimAngle(false);
+    const move = readMovementInput();
     sendOnlineRelay({
       kind: 'input',
-      up: input.keys.has('KeyW') || input.keys.has('ArrowUp'),
-      down: input.keys.has('KeyS') || input.keys.has('ArrowDown'),
-      left: input.keys.has('KeyA') || input.keys.has('ArrowLeft'),
-      right: input.keys.has('KeyD') || input.keys.has('ArrowRight'),
+      up: move.y < 0,
+      down: move.y > 0,
+      left: move.x < 0,
+      right: move.x > 0,
       aim: angleToOnlineDir(aimAngle),
       aimAngle,
       seq: game.online.inputSeq,
     });
+    if (input.orbHeld && now - game.online.lastOrbActionAt >= 90) {
+      game.online.lastOrbActionAt = now;
+      sendGuestAction('orb', aimAngle);
+    }
   }
 
   function processGuestActions(fighter) {
     if (!fighter || game.online.pendingActions.length === 0) return;
     const actions = game.online.pendingActions.splice(0, 6);
     for (const entry of actions) {
-      if (!canAct(fighter)) break;
-      if (entry.action === 'melee') tryMelee(fighter, entry.angle);
-      else if (entry.action === 'orb') tryOrb(fighter, entry.angle);
-      else if (entry.action === 'dodge') tryDodge(fighter, entry.angle);
-      else if (entry.action === 'meditate') toggleMeditation(fighter);
+      if (entry.action === 'melee') {
+        if (canAct(fighter)) {
+          const autoAngle = onlineMeleeAimAngle(fighter, entry.angle);
+          tryMelee(fighter, autoAngle);
+        }
+      } else if (entry.action === 'orb') {
+        if (canAct(fighter) && !tryCounter(fighter)) tryOrb(fighter, entry.angle);
+      } else if (entry.action === 'dodge') {
+        if (canAct(fighter)) tryDodge(fighter, entry.angle);
+      } else if (entry.action === 'gather') {
+        castSpiritGather(fighter);
+      } else if (entry.action === 'counter') {
+        tryCounter(fighter);
+      } else if (entry.action === 'card') {
+        const state = handState(fighter);
+        if (!state || entry.slot < 0 || entry.slot >= state.hand.length) continue;
+        if (state.hand[entry.slot] !== entry.cardId) continue;
+        const card = cardById(entry.cardId);
+        if (!card) continue;
+        let target = null;
+        if (card.targeting === 'ground' && entry.target) {
+          target = {
+            x: world.play.x + entry.target.x * world.play.w,
+            y: world.play.y + entry.target.y * world.play.h,
+          };
+        } else if (card.targeting === 'enemy' && game.player) {
+          target = { x: game.player.x, y: game.player.y };
+        } else {
+          target = { x: fighter.x, y: fighter.y };
+        }
+        playCard(fighter, card, target);
+      }
     }
   }
 
@@ -6470,6 +7788,13 @@
     const fighter = game.enemy;
     if (!fighter) return;
     processGuestActions(fighter);
+
+    if (updateThrow(fighter, dt)) {
+      if (Number.isFinite(game.online.remoteInput.aimAngle)) {
+        fighter.aimAngle = game.online.remoteInput.aimAngle;
+      }
+      return;
+    }
 
     if (updateBounce(fighter, dt)) {
       if (Number.isFinite(game.online.remoteInput.aimAngle)) {
@@ -6488,6 +7813,15 @@
       return;
     }
 
+    if (fighter.rootTimer > 0) {
+      fighter.moving = false;
+      if (Number.isFinite(game.online.remoteInput.aimAngle)) {
+        fighter.aimAngle = game.online.remoteInput.aimAngle;
+        fighter.facing = game.online.remoteInput.aimAngle;
+      }
+      return;
+    }
+
     const remote = game.online.remoteInput;
     const fresh = performance.now() - remote.receivedAt < 480;
     let dx = 0;
@@ -6500,12 +7834,8 @@
     }
     if (dx !== 0 || dy !== 0) {
       const direction = norm(dx, dy);
-      stopMeditation(fighter);
-      const speed = getMoveSpeed();
+      const speed = getMoveSpeed(fighter);
       const moved = moveFighter(fighter, direction.x * speed * dt, direction.y * speed * dt);
-      if (moved > 0.05) {
-        fighter.mana = Math.max(0, fighter.mana - CONFIG.moveManaPerSec * dt);
-      }
       fighter.moving = moved > 0.05;
     } else {
       fighter.moving = false;
@@ -6561,10 +7891,10 @@
 
   function requestLocalMeditation() {
     if (isOnlineGuest()) {
-      sendGuestAction('meditate', getGuestAimAngle(true));
+      sendGuestAction('gather', getGuestAimAngle(true));
       return;
     }
-    toggleMeditation(game.player);
+    castSpiritGather(game.player);
   }
 
   function openSettings() {
@@ -6573,6 +7903,7 @@
       return;
     }
     if (game.settingsOpen) return;
+    input.orbHeld = false;
     game.settingsOpen = true;
     game.paused = true;
     dom.meleeRangeInput.value = `${game.settings.meleeRange}`;
@@ -6628,6 +7959,62 @@
     setText(dom.moveSpeedOutput, `${dom.moveSpeedInput.value}%`);
   }
 
+  function renderCardCodex() {
+    if (!dom.cardCodexGrid) return;
+    const cards = Object.values(CARD_LIBRARY);
+    dom.cardCodexGrid.textContent = '';
+    const fragment = document.createDocumentFragment();
+    for (const card of cards) {
+      const count = CARD_DECK.filter((id) => id === card.id).length;
+      const article = document.createElement('article');
+      article.className = `codex-card${card.temporary ? ' is-temporary' : ''}`;
+      article.style.setProperty('--tone', card.tone);
+
+      const top = document.createElement('div');
+      top.className = 'codex-card-top';
+      const art = document.createElement('span');
+      art.className = 'codex-art';
+      art.textContent = card.art;
+      const cost = document.createElement('span');
+      cost.className = 'codex-cost';
+      cost.textContent = `${card.cost}`;
+      top.append(art, cost);
+
+      const name = document.createElement('h3');
+      name.className = 'codex-name';
+      name.textContent = card.name;
+      const text = document.createElement('p');
+      text.className = 'codex-text';
+      text.textContent = card.text;
+      const foot = document.createElement('div');
+      foot.className = 'codex-foot';
+      const amount = document.createElement('span');
+      amount.textContent = count > 0 ? `卡组 ×${count}` : '临时牌 · 不入卡组';
+      foot.appendChild(amount);
+
+      article.append(top, name, text, foot);
+      fragment.appendChild(article);
+    }
+    dom.cardCodexGrid.appendChild(fragment);
+    if (dom.codexMeta) {
+      setText(dom.codexMeta, `共 ${cards.length} 种卡牌 · 双方共用 ${CARD_DECK.length} 张卡组`);
+    }
+  }
+
+  function openCardCodex() {
+    if (!dom.cardCodexScreen) return;
+    renderCardCodex();
+    dom.cardCodexScreen.hidden = false;
+    dom.cardCodexScreen.style.zIndex = '40';
+    if (dom.closeCodexBtn) window.setTimeout(() => dom.closeCodexBtn.focus({ preventScroll: true }), 30);
+  }
+
+  function closeCardCodex() {
+    if (!dom.cardCodexScreen || dom.cardCodexScreen.hidden) return;
+    dom.cardCodexScreen.hidden = true;
+    if (dom.cardCodexBtn) dom.cardCodexBtn.focus({ preventScroll: true });
+  }
+
   function bindEvents() {
     window.addEventListener('resize', () => {
       window.clearTimeout(bindEvents.resizeTimer);
@@ -6638,9 +8025,15 @@
     });
     window.addEventListener('blur', () => {
       input.keys.clear();
+      input.keyTime = Object.create(null);
+      input.orbHeld = false;
     });
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) input.keys.clear();
+      if (document.hidden) {
+        input.keys.clear();
+      input.keyTime = Object.create(null);
+        input.orbHeld = false;
+      }
     });
 
     dom.startBtn.addEventListener('click', () => startBattle());
@@ -6680,7 +8073,13 @@
       if (game.online.active) leaveOnlineRoom({ toStart: true });
       else returnToStart();
     });
-    dom.startSettingsBtn.addEventListener('click', () => openSettings());
+    if (dom.cardCodexBtn) dom.cardCodexBtn.addEventListener('click', () => openCardCodex());
+    if (dom.closeCodexBtn) dom.closeCodexBtn.addEventListener('click', () => closeCardCodex());
+    if (dom.cardCodexScreen) {
+      dom.cardCodexScreen.addEventListener('click', (event) => {
+        if (event.target === dom.cardCodexScreen) closeCardCodex();
+      });
+    }
     dom.applySettingsBtn.addEventListener('click', () => closeSettings(true));
     dom.cancelSettingsBtn.addEventListener('click', () => closeSettings(false));
     dom.meleeRangeInput.addEventListener('input', updateSettingsDraft);
@@ -6710,27 +8109,77 @@
       if (event.button === 0) {
         playerMelee(false);
       } else if (event.button === 2) {
+        input.orbHeld = true;
         playerOrb(false);
       }
     });
 
-    for (const [skill, button] of Object.entries(dom.skillButtons)) {
-      button.addEventListener('pointerdown', (event) => {
+    dom.cardHand.addEventListener('pointerdown', (event) => {
+      const cardElement = event.target.closest('.game-card');
+      if (!cardElement) return;
+      event.preventDefault();
+      event.stopPropagation();
+      beginCardDrag(cardElement, event);
+    });
+    dom.dodgeBtn.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      dom.dodgeBtn.blur();
+      if (game.mode !== 'battle' || game.paused || game.settingsOpen) return;
+      playerDodge();
+    });
+    dom.spiritBtn.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      dom.spiritBtn.blur();
+      if (game.mode !== 'battle' || game.paused || game.settingsOpen) return;
+      requestLocalMeditation();
+    });
+    if (dom.counterBtn) {
+      dom.counterBtn.addEventListener('pointerdown', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        button.blur();
+        dom.counterBtn.blur();
         if (game.mode !== 'battle' || game.paused || game.settingsOpen) return;
-        if (skill === 'melee') playerMelee(true);
-        else if (skill === 'orb') playerOrb(true);
-        else if (skill === 'dodge') playerDodge();
-        else if (skill === 'meditate') requestLocalMeditation();
+        requestCounter();
       });
     }
+    // 拖牌期间阻止右键菜单；撤回改为「在手牌区松开左键」。
+    window.addEventListener(
+      'contextmenu',
+      (event) => {
+        if (game.cardDrag) event.preventDefault();
+      },
+      true
+    );
+    window.addEventListener('pointermove', (event) => {
+      if (game.cardDrag) updateCardDrag(event);
+    });
+    window.addEventListener('pointerup', (event) => {
+      if (game.cardDrag) finishCardDrag(event);
+      if (event.button === 2 || event.button === -1) input.orbHeld = false;
+    });
+    window.addEventListener('pointercancel', () => {
+      input.orbHeld = false;
+      const drag = game.cardDrag;
+      if (!drag) return;
+      game.cardDrag = null;
+      if (drag.ghost) drag.ghost.remove();
+      if (drag.element) drag.element.classList.remove('is-dragging');
+    });
 
     window.addEventListener('keydown', (event) => {
       ensureAudio();
       const code = event.code;
       const isMovement = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(code);
+
+      if (dom.cardCodexScreen && !dom.cardCodexScreen.hidden) {
+        if (code === 'Escape') {
+          event.preventDefault();
+          closeCardCodex();
+        }
+        return;
+      }
 
       if (game.settingsOpen) {
         if (code === 'Escape') {
@@ -6749,6 +8198,10 @@
 
       if (game.mode === 'battle' && !game.paused) {
         if (isMovement) {
+          if (!input.keys.has(code)) {
+            input.keySerial += 1;
+            input.keyTime[code] = input.keySerial;
+          }
           input.keys.add(code);
           if (code.startsWith('Arrow')) event.preventDefault();
         }
@@ -6758,6 +8211,15 @@
         } else if (code === 'KeyF') {
           event.preventDefault();
           if (!event.repeat) requestLocalMeditation();
+        } else if (
+          code === 'Digit1' ||
+          code === 'Digit2' ||
+          code === 'Digit3' ||
+          code === 'Digit4' ||
+          code === 'Digit5'
+        ) {
+          event.preventDefault();
+          if (!event.repeat) playCardByIndex(Number(code.slice(5)) - 1);
         } else if (code === 'Escape') {
           event.preventDefault();
           if (game.online.active) {
@@ -6782,6 +8244,7 @@
 
     window.addEventListener('keyup', (event) => {
       input.keys.delete(event.code);
+      delete input.keyTime[event.code];
     });
 
     window.addEventListener('pointerdown', (event) => {
@@ -6828,18 +8291,30 @@
                 radius: Number(fighter.radius.toFixed(2)),
                 hp: Number(fighter.hp.toFixed(2)),
                 mana: Number(fighter.mana.toFixed(2)),
+                maxMana: fighter.maxMana,
+                essence: fighter.essence,
                 meleeCombo: fighter.meleeCombo,
                 rangedCombo: fighter.rangedCombo,
                 meleeCooldown: Number(fighter.meleeCooldown.toFixed(3)),
                 orbCooldown: Number(fighter.orbCooldown.toFixed(3)),
                 dodgeCooldown: Number(fighter.dodgeCooldown.toFixed(3)),
-                meditateCooldown: Number(fighter.meditateCooldown.toFixed(3)),
                 dodgeRemaining: Number(fighter.dodgeRemaining.toFixed(3)),
+                counterCooldown: Number(fighter.counterCooldown.toFixed(2)),
+                counterOrbLock: Number((fighter.counterOrbLock || 0).toFixed(2)),
+                healUses: fighter.healUses,
+                throwRemaining: Number(fighter.throwRemaining.toFixed(2)),
                 bounceRemaining: Number(fighter.bounceRemaining.toFixed(3)),
                 invuln: Number(fighter.invuln.toFixed(3)),
-                empowered: fighter.empowered,
-                meditating: fighter.meditating,
-                exhausted: fighter.exhausted,
+                regenBlocked: Number(fighter.regenBlocked.toFixed(3)),
+                speedBoostTimer: Number(fighter.speedBoostTimer.toFixed(2)),
+                buffAppliedAt: { ...(fighter.buffAppliedAt || {}) },
+                healRemaining: Number(fighter.healRemaining.toFixed(2)),
+                stunRemaining: Number(fighter.stunRemaining.toFixed(2)),
+                rootTimer: Number(fighter.rootTimer.toFixed(2)),
+                meditationTimer: Number(fighter.meditationTimer.toFixed(2)),
+                castDuration: Number((fighter.castDuration || 0).toFixed(2)),
+                damageBoostTimer: Number(fighter.damageBoostTimer.toFixed(2)),
+                stats: { ...fighter.stats },
                 swing: fighter.swing ? { ...fighter.swing } : null,
               }
             : null;
@@ -6858,10 +8333,34 @@
             y: Number(p.y.toFixed(2)),
             speed: Number(p.speed.toFixed(2)),
             damage: p.damage,
-            empowered: p.empowered,
             serial: p.serial,
             manaCost: p.manaCost,
           })),
+          cards: game.cards
+            ? {
+                hand: [...game.cards.hand],
+                preview: Array.isArray(game.cards.preview) ? [...game.cards.preview] : [],
+                deck: [...game.cards.deck],
+                giantSwords: game.giantSwords.map((sword) => ({
+                  x: Number(sword.x.toFixed(1)),
+                  y: Number(sword.y.toFixed(1)),
+                  elapsed: Number(sword.elapsed.toFixed(2)),
+                  delay: sword.delay,
+                  struck: sword.struck,
+                })),
+              }
+            : null,
+          aiCards: game.enemyCards
+            ? {
+                hand: [...game.enemyCards.hand],
+                preview: Array.isArray(game.enemyCards.preview) ? [...game.enemyCards.preview] : [],
+                deckSize: game.enemyCards.deck.length,
+              }
+            : null,
+          cardsPlayed: {
+            player: game.match.cardsPlayed,
+            enemy: game.enemy ? game.enemy.stats.cardsPlayed : 0,
+          },
           obstacles: world.obstacles.map((o) => ({
             kind: o.kind,
             x: Number(o.x.toFixed(2)),
@@ -6953,6 +8452,10 @@
           const fighter = team === 'player' ? game.player : game.enemy;
           if (fighter) fighter.invuln = Math.max(0, Number(seconds) || 0);
         },
+        setStun(team, seconds) {
+          const fighter = team === 'player' ? game.player : game.enemy;
+          if (fighter) applyStun(fighter, Math.max(0, Number(seconds) || 0));
+        },
         setMana(team, mana) {
           const fighter = team === 'player' ? game.player : game.enemy;
           if (fighter) fighter.mana = clamp(mana, 0, fighter.maxMana);
@@ -6975,15 +8478,55 @@
           const fighter = team === 'player' ? game.player : game.enemy;
           if (!fighter) return;
           if (Number.isFinite(values.dodge)) fighter.dodgeCooldown = values.dodge;
+          if (Number.isFinite(values.counter)) fighter.counterCooldown = values.counter;
           if (Number.isFinite(values.melee)) fighter.meleeCooldown = values.melee;
           if (Number.isFinite(values.orb)) fighter.orbCooldown = values.orb;
-          if (Number.isFinite(values.meditate)) fighter.meditateCooldown = values.meditate;
+        },
+        setEssence(team, value) {
+          const fighter = team === 'player' ? game.player : game.enemy;
+          if (fighter) fighter.essence = clamp(Math.round(value), 0, CONFIG.essenceMax);
+          updateHud(true);
+        },
+        setHand(ids) {
+          if (!game.cards || !Array.isArray(ids)) return false;
+          game.cards.hand = ids.filter((id) => CARD_LIBRARY[id]).slice(0, CARD_HAND_SIZE);
+          game.cards.preview = game.cards.hand.map((_, i) => game.cards.deck[i] || null);
+          if (game.player) game.player.stealPlusTimers = [];
+          renderCardHand();
+          updateHud(true);
+          return true;
+        },
+        setEnemyHand(ids) {
+          if (!game.enemyCards || !Array.isArray(ids)) return false;
+          game.enemyCards.hand = ids.filter((id) => CARD_LIBRARY[id]).slice(0, CARD_HAND_SIZE);
+          game.enemyCards.preview = game.enemyCards.hand.map((_, i) => game.enemyCards.deck[i] || null);
+          if (game.enemy) game.enemy.stealPlusTimers = [];
+          return true;
+        },
+        gather(team) {
+          const fighter = team === 'player' ? game.player : game.enemy;
+          if (fighter) castSpiritGather(fighter);
+        },
+        playCard(index, x, y) {
+          const id = game.cards && game.cards.hand[index];
+          const card = cardById(id);
+          const player = game.player;
+          if (!card || !player) return false;
+          const point =
+            card.targeting === 'ground'
+              ? { x: Number.isFinite(x) ? x : player.x, y: Number.isFinite(y) ? y : player.y }
+              : { x: player.x, y: player.y };
+          return playCard(player, card, point);
+        },
+        hand() {
+          return game.cards ? [...game.cards.hand] : [];
         },
         setEnemyMode(mode) {
           if (game.ai) game.ai.mode = mode;
         },
         stopPlayer() {
           input.keys.clear();
+      input.keyTime = Object.create(null);
         },
         freezeAI(value = true) {
           game.debugFreezeAI = Boolean(value);
@@ -7036,7 +8579,14 @@
       playerMelee,
       playerOrb,
       playerDodge,
-      toggleMeditation: () => toggleMeditation(game.player),
+      gather: () => castSpiritGather(game.player),
+      playCard: (index, x, y) => {
+        const id = game.cards && game.cards.hand[index];
+        const card = cardById(id);
+        const player = game.player;
+        if (!card || !player) return false;
+        return playCard(player, card, { x: Number.isFinite(x) ? x : player.x, y: Number.isFinite(y) ? y : player.y });
+      },
       tryMelee,
       tryOrb,
       tryDodge,
@@ -7062,3 +8612,4 @@
 
   init();
 })();
+
