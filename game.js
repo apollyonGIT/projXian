@@ -503,6 +503,11 @@
       inputSeq: 0,
       lastOrbActionAt: 0,
       cardSignature: '',
+      hostMoveSpeedPercent: 100,
+      bgWorker: null,
+      bgWorkerUrl: null,
+      bgAccumulator: 0,
+      bgLastTick: 0,
       connectPromise: null,
       remoteInput: {
         up: false,
@@ -4031,7 +4036,7 @@
     lastFrame = now;
 
     const guestOnline = isOnlineGuest();
-    if (game.mode === 'battle' && !guestOnline && !game.paused && !game.settingsOpen) {
+    if (game.mode === 'battle' && !guestOnline && !game.paused && !game.settingsOpen && !document.hidden) {
       accumulator += frameDelta;
       let steps = 0;
       while (accumulator >= STEP && steps < 8) {
@@ -7435,6 +7440,7 @@
     game.online.lastInputSentAt = 0;
     game.online.lastOrbActionAt = 0;
     game.online.cardSignature = '';
+    game.online.hostMoveSpeedPercent = game.settings.moveSpeedPercent;
     game.online.lastSnapshotAt = 0;
     game.online.lastSnapshotReceivedAt = 0;
     game.online.pendingActions.length = 0;
@@ -7464,10 +7470,12 @@
     game.settingsOpen = false;
     showToast(role === 'host' ? '论剑开始 · 等待道友出手' : '论剑开始 · 道友请出招', '', 1500);
     updateHud(true);
+    if (role === 'host' && document.hidden) startOnlineBackgroundTicker();
   }
 
   function leaveOnlineRoom({ toStart = true, silent = false } = {}) {
     const hadRoom = Boolean(game.online.role || game.online.code);
+    stopOnlineBackgroundTicker();
     game.online.leaving = true;
     if (game.online.socket && game.online.socket.readyState === WebSocket.OPEN) {
       try {
@@ -7530,6 +7538,7 @@
           w: world.play.w,
           h: world.play.h,
           scale: world.scale,
+          moveSpeedPercent: game.settings.moveSpeedPercent,
         },
         player: game.player,
         enemy: game.enemy,
@@ -7563,14 +7572,97 @@
     });
   }
 
+  function stopOnlineBackgroundTicker() {
+    if (game.online.bgWorker) {
+      try {
+        game.online.bgWorker.postMessage('stop');
+      } catch (error) {
+        // ignore
+      }
+    }
+    game.online.bgAccumulator = 0;
+    game.online.bgLastTick = 0;
+  }
+
+  function startOnlineBackgroundTicker() {
+    if (!isOnlineHost() || !game.online.active) return;
+    if (!game.online.bgWorker) {
+      try {
+        const source =
+          "let timer = 0; onmessage = (event) => {" +
+          "  if (event.data === 'start') {" +
+          "    if (!timer) timer = setInterval(() => postMessage('tick'), 16);" +
+          "  } else if (event.data === 'stop') {" +
+          "    clearInterval(timer); timer = 0;" +
+          "  }" +
+          "};";
+        const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+        const worker = new Worker(url);
+        worker.onmessage = () => tickOnlineBackgroundHost();
+        game.online.bgWorker = worker;
+        game.online.bgWorkerUrl = url;
+      } catch (error) {
+        game.online.bgWorker = null;
+        return;
+      }
+    }
+    game.online.bgAccumulator = 0;
+    game.online.bgLastTick = performance.now();
+    try {
+      game.online.bgWorker.postMessage('start');
+    } catch (error) {
+      // ignore
+    }
+  }
+
+  function tickOnlineBackgroundHost() {
+    if (
+      !document.hidden ||
+      !isOnlineHost() ||
+      !game.online.active ||
+      game.mode !== 'battle' ||
+      game.paused ||
+      game.settingsOpen
+    ) {
+      return;
+    }
+    const now = performance.now();
+    if (!game.online.bgLastTick) game.online.bgLastTick = now;
+    const delta = Math.min(0.2, Math.max(0, (now - game.online.bgLastTick) / 1000));
+    game.online.bgLastTick = now;
+    game.online.bgAccumulator += delta;
+    let steps = 0;
+    while (game.online.bgAccumulator >= STEP && steps < 8) {
+      game.online.bgAccumulator -= STEP;
+      steps += 1;
+      step(STEP);
+      if (game.mode !== 'battle') break;
+    }
+    if (steps === 8) game.online.bgAccumulator = 0;
+    if (now - game.online.lastSnapshotAt >= ONLINE_SNAPSHOT_INTERVAL) {
+      game.online.lastSnapshotAt = now;
+      sendOnlineSnapshot();
+    }
+  }
+
   function installOnlineFighter(incoming, previous) {
     const fighter = incoming || previous;
     if (!fighter) return fighter;
+    const previousNetX = previous && Number.isFinite(previous.netX) ? previous.netX : null;
+    const previousNetY = previous && Number.isFinite(previous.netY) ? previous.netY : null;
     fighter.netX = Number(fighter.x) || 0;
     fighter.netY = Number(fighter.y) || 0;
     if (previous && Number.isFinite(previous.x) && Number.isFinite(previous.y)) {
       const jump = dist(previous.x, previous.y, fighter.netX, fighter.netY);
-      if (jump < 185 * world.scale) {
+      const netJump =
+        previousNetX !== null && previousNetY !== null
+          ? dist(previousNetX, previousNetY, fighter.netX, fighter.netY)
+          : 0;
+      // 服务端位置突然大跳（缩地、击飞、重生）时直接接管；普通行走误差交给预测。
+      if (netJump > 130 * world.scale) {
+        fighter.x = fighter.netX;
+        fighter.y = fighter.netY;
+      } else if (jump < 185 * world.scale) {
         fighter.x = previous.x;
         fighter.y = previous.y;
       }
@@ -7652,6 +7744,9 @@
     if (!snapshot || !isOnlineGuest() || game.mode !== 'battle') return;
     if (!snapshot.player || !snapshot.enemy) return;
     transformOnlineSnapshot(snapshot);
+    if (snapshot.view && Number.isFinite(snapshot.view.moveSpeedPercent)) {
+      game.online.hostMoveSpeedPercent = clamp(snapshot.view.moveSpeedPercent, 50, 200);
+    }
     game.player = installOnlineFighter(snapshot.player, game.player);
     game.enemy = installOnlineFighter(snapshot.enemy, game.enemy);
     game.projectiles = Array.isArray(snapshot.projectiles) ? snapshot.projectiles : [];
@@ -7680,21 +7775,86 @@
     if (!game.cardDrag) renderCardHand();
   }
 
+  function canPredictGuestMovement(fighter) {
+    return Boolean(
+      fighter &&
+      fighter.hp > 0 &&
+      game.mode === 'battle' &&
+      !game.paused &&
+      !game.endPending &&
+      !game.settingsOpen &&
+      fighter.stunRemaining <= 0 &&
+      fighter.rootTimer <= 0 &&
+      fighter.throwRemaining <= 0 &&
+      fighter.bounceRemaining <= 0 &&
+      fighter.dodgeRemaining <= 0
+    );
+  }
+
+  function getGuestPredictedMoveSpeed(fighter) {
+    const percent = clamp(
+      Number(game.online.hostMoveSpeedPercent) || game.settings.moveSpeedPercent,
+      50,
+      200
+    );
+    const boost = fighter && fighter.speedBoostTimer > 0 ? 1.5 : 1;
+    return 252 * world.scale * (percent / 100) * boost;
+  }
+
   function updateOnlineGuestView(dt) {
     if (!isOnlineGuest()) return;
     const blend = 1 - Math.exp(-22 * Math.max(0, Math.min(dt, 0.1)));
-    for (const fighter of [game.player, game.enemy]) {
-      if (!fighter) continue;
-      if (!Number.isFinite(fighter.netX) || !Number.isFinite(fighter.netY)) continue;
-      const dx = fighter.netX - fighter.x;
-      const dy = fighter.netY - fighter.y;
+    const hostFighter = game.player;
+    if (hostFighter && Number.isFinite(hostFighter.netX) && Number.isFinite(hostFighter.netY)) {
+      const dx = hostFighter.netX - hostFighter.x;
+      const dy = hostFighter.netY - hostFighter.y;
       const jump = Math.hypot(dx, dy);
       if (jump > 185 * world.scale) {
-        fighter.x = fighter.netX;
-        fighter.y = fighter.netY;
+        hostFighter.x = hostFighter.netX;
+        hostFighter.y = hostFighter.netY;
       } else {
-        fighter.x += dx * blend;
-        fighter.y += dy * blend;
+        hostFighter.x += dx * blend;
+        hostFighter.y += dy * blend;
+      }
+    }
+
+    const local = game.enemy;
+    if (local) {
+      const move = canPredictGuestMovement(local) ? readMovementInput() : null;
+      if (move && (move.x !== 0 || move.y !== 0)) {
+        // 客机本地先行：输入不再等待房主往返，服务端快照只负责纠偏。
+        const direction = norm(move.x, move.y);
+        const speed = getGuestPredictedMoveSpeed(local);
+        const moved = moveFighter(local, direction.x * speed * dt, direction.y * speed * dt);
+        local.moving = moved > 0.05;
+      } else {
+        local.moving = false;
+      }
+
+      if (canPredictGuestMovement(local)) {
+        const aim = getGuestAimAngle(false);
+        local.aimAngle = aim;
+        local.facing = aim;
+        if (!local.moving && Number.isFinite(local.netX) && Number.isFinite(local.netY)) {
+          // 停步后轻微回收预测位移，避免长期停住时与房主位置分叉。
+          const dx = local.netX - local.x;
+          const dy = local.netY - local.y;
+          const error = Math.hypot(dx, dy);
+          if (error > 4 * world.scale) {
+            local.x += dx * blend * 0.3;
+            local.y += dy * blend * 0.3;
+          }
+        }
+      } else if (Number.isFinite(local.netX) && Number.isFinite(local.netY)) {
+        const dx = local.netX - local.x;
+        const dy = local.netY - local.y;
+        if (Math.hypot(dx, dy) > 185 * world.scale) {
+          local.x = local.netX;
+          local.y = local.netY;
+        } else {
+          local.x += dx * blend;
+          local.y += dy * blend;
+        }
       }
     }
     game.ambientTime += Math.min(dt, 0.05) * 0.35;
@@ -7823,7 +7983,7 @@
     }
 
     const remote = game.online.remoteInput;
-    const fresh = performance.now() - remote.receivedAt < 480;
+    const fresh = performance.now() - remote.receivedAt < 900;
     let dx = 0;
     let dy = 0;
     if (fresh) {
@@ -8031,8 +8191,16 @@
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         input.keys.clear();
-      input.keyTime = Object.create(null);
+        input.keyTime = Object.create(null);
         input.orbHeld = false;
+        if (isOnlineHost() && game.online.active) {
+          startOnlineBackgroundTicker();
+          showToast('房主页面切到后台，已启用后台同步；请尽快切回前台', 'warn', 2400);
+        }
+      } else if (!document.hidden) {
+        stopOnlineBackgroundTicker();
+        lastFrame = 0;
+        accumulator = 0;
       }
     });
 
