@@ -31,9 +31,8 @@
     // 灵力规则：灵子 5 点，近战不耗灵力（只在命中时回灵）。
     orbCost: 5,
     meleeCost: 0,
-    // 被动回灵：移动 20/秒，站定翻倍 40/秒，出招后 0.5 秒内不回。
-    manaRegenMoving: 20,
-    manaRegenIdle: 40,
+    // 自然回灵固定 10/秒；仅发射灵子后的 0.5 秒内暂停。
+    manaRegenPerSecond: 10,
     regenPauseAfterAttack: 0.5,
     // 回灵：灵子命中 +25，近战命中 +35，拼刀 +50（优先于近战命中），对波 +60。
     manaOnOrbHit: 25,
@@ -1231,7 +1230,6 @@
 
     fighter.meditationTimer = 0;
     fighter.mana = Math.max(0, fighter.mana - cost);
-    fighter.regenBlocked = CONFIG.regenPauseAfterAttack;
     game.combatLog.push({
       team: fighter.team,
       type: 'melee',
@@ -3948,10 +3946,9 @@
   function updateRegen(dt) {
     for (const fighter of [game.player, game.enemy]) {
       if (!fighter || fighter.hp <= 0) continue;
-      // 被动回灵：站定 40 / 秒，移动 20 / 秒；出招后的 0.5 秒内停止回复。
+      // 自然回灵固定 10/秒；仅发射灵子后短暂停止。
       if (fighter.regenBlocked <= 0) {
-        const rate = fighter.moving ? CONFIG.manaRegenMoving : CONFIG.manaRegenIdle;
-        addMana(fighter, rate * dt, false);
+        addMana(fighter, CONFIG.manaRegenPerSecond * dt, false);
       }
       // 精魄：每 6 秒自动 +1，上限 10。
       if (fighter.essence < CONFIG.essenceMax) {
@@ -6463,7 +6460,6 @@
       return false;
     }
     fighter.essence -= card.cost;
-    fighter.regenBlocked = CONFIG.regenPauseAfterAttack;
     fighter.meditationTimer = 0;
     fighter.stats.cardsPlayed += 1;
     if (fighter === game.player) game.match.cardsPlayed += 1;
