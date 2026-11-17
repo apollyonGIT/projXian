@@ -2740,26 +2740,30 @@
     };
   }
 
+  function guestOrbOrigin() {
+    const local = game.enemy;
+    if (!local) return null;
+    return {
+      x: clamp((local.x - world.play.x) / Math.max(1, world.play.w), 0, 1),
+      y: clamp((local.y - world.play.y) / Math.max(1, world.play.h), 0, 1),
+    };
+  }
+
   function playerOrb(autoAim = false) {
     if (isOnlineGuest()) {
       game.online.lastOrbActionAt = performance.now();
+      const angle = getGuestAimAngle(autoAim);
       const local = game.enemy;
       game.online.orbPreview = local
         ? {
             elapsed: 0,
             duration: 0.18,
-            angle: getGuestAimAngle(autoAim),
+            angle,
             x: local.x,
             y: local.y,
           }
         : null;
-      const origin = local
-        ? {
-            x: clamp((local.x - world.play.x) / Math.max(1, world.play.w), 0, 1),
-            y: clamp((local.y - world.play.y) / Math.max(1, world.play.h), 0, 1),
-          }
-        : null;
-      sendGuestAction('orb', getGuestAimAngle(autoAim), { origin });
+      sendGuestAction('orb', angle, { origin: guestOrbOrigin() });
       return;
     }
     if (!canAct(game.player)) return;
@@ -8427,7 +8431,10 @@
     });
     if (input.orbHeld && now - game.online.lastOrbActionAt >= 90) {
       game.online.lastOrbActionAt = now;
-      sendGuestAction('orb', aimAngle);
+      game.online.orbPreview = game.enemy
+        ? { elapsed: 0, duration: 0.18, angle: aimAngle, x: game.enemy.x, y: game.enemy.y }
+        : null;
+      sendGuestAction('orb', aimAngle, { origin: guestOrbOrigin() });
     }
   }
 
