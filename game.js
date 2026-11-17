@@ -34,11 +34,11 @@
     // 自然回灵固定 10/秒；仅发射灵子后的 0.5 秒内暂停。
     manaRegenPerSecond: 10,
     regenPauseAfterAttack: 0.5,
-    // 回灵：灵子命中 +25，近战命中 +35，拼刀 +50（优先于近战命中），对波后发者 +10。
+    // 回灵：灵子命中 +25，近战命中 +35，拼刀 +50（优先于近战命中），对波后发者 +20。
     manaOnOrbHit: 25,
     manaOnMeleeHit: 35,
     manaOnMeleeClash: 50,
-    manaOnClash: 10,
+    manaOnClash: 20,
     counterManaCost: 50,
     // 精魄（“费”）：灵力满 100 自动凝成 1 点，上限 10；没有自然回复。
     essenceMax: 10,
@@ -102,7 +102,7 @@
       cost: 1,
       tone: '#7fd8c4',
       art: '🌀',
-      text: '自身移动速度提高 50%，持续 10 秒；可解除自身眩晕。',
+      text: '自身移动速度提高 50%，持续 10 秒；可解除自身眩晕，并抵挡一次反制。',
       targeting: 'self',
       duration: 10,
       speedBonus: 0.5,
@@ -143,7 +143,7 @@
       cost: 1,
       tone: '#b7a4e8',
       art: '⇢',
-      text: '将自身传送到指定位置。',
+      text: '将自身传送到指定位置，并解除自身眩晕。',
       targeting: 'ground',
     }),
     blood: Object.freeze({
@@ -162,7 +162,7 @@
       cost: 2,
       tone: '#8fa3b8',
       art: '🔨',
-      text: '释放后使对手眩晕 3 秒；受到首次攻击后解除。',
+      text: '释放后使对手眩晕 3 秒，并清除其轻身术；眩晕受到首次攻击后解除。',
       targeting: 'self',
       duration: CONFIG.stunDuration,
     }),
@@ -1508,19 +1508,46 @@
       return false;
     }
 
+    const away = Math.atan2(opponent.y - defender.y, opponent.x - defender.x);
     defender.mana = Math.max(0, defender.mana - CONFIG.counterManaCost);
+    defender.counterCooldown = CONFIG.counterCooldown;
+    defender.counterOrbLock = CONFIG.counterOrbLock;
+
+    // 轻身术可以抵挡一次反制：反制方仍消耗灵力并进入冷却，但目标不被投掷/眩晕。
+    if (opponent.speedBoostTimer > 0) {
+      opponent.speedBoostTimer = 0;
+      if (opponent.buffAppliedAt) opponent.buffAppliedAt.speed = 0;
+      defender.facing = away;
+      defender.aimAngle = away;
+      game.shake = Math.max(game.shake, 4);
+      spawnRipple(defender.x, defender.y, '#9fe8d6', 0.4, defender.radius * 2);
+      spawnRipple(opponent.x, opponent.y, '#b8f0e0', 0.34, opponent.radius * 1.6);
+      spawnFloater(opponent.x, opponent.y - 56 * world.scale, '轻身挡反', '#9fe8d6', 0.9, 15);
+      if (opponent === game.player) {
+        showToast('轻身术挡下了反制；轻身已消散', '', 1400);
+      } else if (defender === game.player) {
+        showToast('对手的轻身术挡下了反制', 'warn', 1200);
+      }
+      game.combatLog.push({
+        team: defender.team,
+        type: 'counter-blocked',
+        time: Number(game.battleTime.toFixed(2)),
+        meleeCombo: defender.meleeCombo,
+        rangedCombo: defender.rangedCombo,
+      });
+      if (game.combatLog.length > 30) game.combatLog.shift();
+      return true;
+    }
+
     opponent.swing = null;
     opponent.meleeCooldown = Math.max(opponent.meleeCooldown, CONFIG.meleeCooldown);
     opponent.meditationTimer = 0;
-    const away = Math.atan2(opponent.y - defender.y, opponent.x - defender.x);
     opponent.throwRemaining = CONFIG.throwDuration;
     opponent.throwDirX = Math.cos(away);
     opponent.throwDirY = Math.sin(away);
     opponent.throwSpeed = CONFIG.throwSpeed * world.scale;
     // 反制会眩晕被扔出去的人；受到首次攻击后解除（damageFighter 负责）。
     applyStun(opponent, CONFIG.counterStunDuration);
-    defender.counterCooldown = CONFIG.counterCooldown;
-    defender.counterOrbLock = CONFIG.counterOrbLock;
     defender.facing = -away;
     defender.aimAngle = -away;
 
@@ -2158,7 +2185,7 @@
       }
     }
 
-    // Opposing orbs annihilate. The later launch gains a flat 10 spirit (对波).
+    // Opposing orbs annihilate. The later launch gains a flat 20 spirit (对波).
     // Use swept segments so fast orbs cannot tunnel through each other.
     for (let i = 0; i < game.projectiles.length; i += 1) {
       const a = game.projectiles[i];
@@ -6536,9 +6563,15 @@
       fighter.prevY = y;
       resolveObstaclePenetration(fighter);
       clampFighterToArena(fighter);
+      const hadStun = fighter.stunRemaining > 0;
+      fighter.stunRemaining = 0;
       spawnDust(fighter.x, fighter.y, 10, fighter.palette.robeLight);
       spawnRipple(fighter.x, fighter.y, '#d9c8ff', 0.5, fighter.radius * 2);
       spawnFloater(fighter.x, fighter.y - 58 * world.scale, '缩地', '#d9c8ff', 0.9, 14);
+      if (hadStun) {
+        spawnFloater(fighter.x, fighter.y - 80 * world.scale, '解晕', '#e6dcff', 0.8, 14);
+        if (fighter === game.player) showToast('缩地解除了眩晕', '', 1000);
+      }
     } else if (card.id === 'blood') {
       fighter.damageBoostTimer = card.duration;
       markBuffApplied(fighter, 'blood');
@@ -6553,12 +6586,19 @@
     } else if (card.id === 'hammer') {
       const target = fighter === game.player ? game.enemy : game.player;
       if (!target || target.hp <= 0) return false;
+      const hadSpeed = target.speedBoostTimer > 0;
       applyStun(target, CONFIG.stunDuration);
+      target.speedBoostTimer = 0;
+      if (target.buffAppliedAt) target.buffAppliedAt.speed = 0;
       target.swing = null;
       target.dodgeRemaining = 0;
       target.moving = false;
       spawnRipple(target.x, target.y, '#b8c8dc', 0.5, target.radius * 2.2);
       spawnFloater(target.x, target.y - 58 * world.scale, `眩晕 ${CONFIG.stunDuration} 秒`, '#dce8ff', 0.9, 15);
+      if (hadSpeed) {
+        spawnFloater(target.x, target.y - 82 * world.scale, '轻身被破', '#c8d8f0', 0.85, 14);
+        if (fighter === game.player) showToast('玄武锤清除了对手的轻身术', '', 1100);
+      }
     }
 
     if (consume) consumeCardFromHand(fighter, card.id);
