@@ -34,11 +34,11 @@
     // 自然回灵固定 10/秒；仅发射灵子后的 0.5 秒内暂停。
     manaRegenPerSecond: 10,
     regenPauseAfterAttack: 0.5,
-    // 回灵：灵子命中 +25，近战命中 +35，拼刀 +50（优先于近战命中），对波 +60。
+    // 回灵：灵子命中 +25，近战命中 +35，拼刀 +50（优先于近战命中），对波后发者 +10。
     manaOnOrbHit: 25,
     manaOnMeleeHit: 35,
     manaOnMeleeClash: 50,
-    manaOnClash: 60,
+    manaOnClash: 10,
     counterManaCost: 50,
     // 精魄（“费”）：灵力满 100 自动凝成 1 点，上限 10；没有自然回复。
     essenceMax: 10,
@@ -2158,7 +2158,7 @@
       }
     }
 
-    // Opposing orbs annihilate. The later launch gains a flat 60 spirit (对波).
+    // Opposing orbs annihilate. The later launch gains a flat 10 spirit (对波).
     // Use swept segments so fast orbs cannot tunnel through each other.
     for (let i = 0; i < game.projectiles.length; i += 1) {
       const a = game.projectiles[i];
