@@ -2,7 +2,7 @@
 
 《问道·斗法》的最新联机版本：保留完整的卡牌、精魄、反制、眩晕、增益与单机 AI 规则，并增加房间号 1v1。
 
-**线上地址**：<https://wendao-doufa-yknp.onrender.com>  
+**线上地址**：<https://wendao-doufa.onrender.com>  
 **GitHub**：<https://github.com/apollyonGIT/projXian>
 
 ## 开始游戏
