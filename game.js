@@ -28,18 +28,19 @@
     // 基础伤害（不含嗜血等增伤）：近战 10，灵子 5。
     meleeDamage: 10,
     orbDamage: 5,
-    // 灵力规则：灵子 10 点，近战不耗灵力（只在命中时回灵）。
-    orbCost: 10,
+    // 灵力规则：灵子 5 点，近战不耗灵力（只在命中时回灵）。
+    orbCost: 5,
     meleeCost: 0,
     // 被动回灵：移动 20/秒，站定翻倍 40/秒，出招后 0.5 秒内不回。
     manaRegenMoving: 20,
     manaRegenIdle: 40,
     regenPauseAfterAttack: 0.5,
-    // 回灵：灵子命中 +25，近战命中 +60，拼刀 +75（不与近战命中叠加），对波 +60。
+    // 回灵：灵子命中 +25，近战命中 +35，拼刀 +50（优先于近战命中），对波 +60。
     manaOnOrbHit: 25,
-    manaOnMeleeHit: 60,
-    manaOnMeleeClash: 75,
+    manaOnMeleeHit: 35,
+    manaOnMeleeClash: 50,
     manaOnClash: 60,
+    counterManaCost: 50,
     // 精魄（“费”）：灵力满 100 自动凝成 1 点，上限 10；另有每 6 秒自动 +1。
     essenceMax: 10,
     essenceInterval: 6,
@@ -1513,6 +1514,7 @@
       return false;
     }
 
+    defender.mana = Math.max(0, defender.mana - CONFIG.counterManaCost);
     opponent.swing = null;
     opponent.meleeCooldown = Math.max(opponent.meleeCooldown, CONFIG.meleeCooldown);
     opponent.meditationTimer = 0;
@@ -1572,6 +1574,13 @@
     if (swing.clashed) return;
     const opponent = fighter === game.player ? game.enemy : game.player;
     if (!opponent || opponent.hp <= 0) return;
+    // 双方刀光同时存在时优先判拼刀，避免一刀先结算后另一刀再吃近战命中回灵。
+    if (opponent.swing && !opponent.swing.clashed && !opponent.swing.resolved) {
+      swing.clashed = true;
+      opponent.swing.clashed = true;
+      triggerMeleeClash(fighter, opponent);
+      return;
+    }
 
     const reach = getMeleeReach(fighter);
     const distance = dist(fighter.x, fighter.y, opponent.x, opponent.y);
@@ -1598,7 +1607,7 @@
           if (fighter === game.player) {
             game.match.playerDamage += damage;
           }
-          // 近战命中：攻击者回复 60 点灵力（未命中不回复）。
+          // 近战命中：攻击者回复 35 点灵力（未命中不回复）。
           restoreMana(fighter, CONFIG.manaOnMeleeHit);
           game.shake = Math.max(game.shake, 7);
           spawnMeleeHit(opponent.x, opponent.y - 20 * world.scale, fighter.palette, false);
