@@ -1323,7 +1323,7 @@
     return true;
   }
 
-  function tryOrb(fighter, angle) {
+  function tryOrb(fighter, angle, originPoint = null) {
     if (!canAct(fighter)) return false;
     // 近战刀光期间不能同时发射灵子。
     if (fighter.swing) return false;
@@ -1361,11 +1361,13 @@
     const spawnDistance = fighter.radius + 16 * world.scale;
     const initialSpeed = getOrbInitialSpeed();
     const damage = CONFIG.orbDamage * (fighter.damageBoostTimer > 0 ? 2 : 1);
+    const originX = originPoint && Number.isFinite(originPoint.x) ? originPoint.x : fighter.x;
+    const originY = originPoint && Number.isFinite(originPoint.y) ? originPoint.y : fighter.y;
     const projectile = {
-      x: fighter.x + direction.x * spawnDistance,
-      y: fighter.y + direction.y * spawnDistance,
-      prevX: fighter.x,
-      prevY: fighter.y,
+      x: originX + direction.x * spawnDistance,
+      y: originY + direction.y * spawnDistance,
+      prevX: originX,
+      prevY: originY,
       vx: direction.x * initialSpeed,
       vy: direction.y * initialSpeed,
       speed: initialSpeed,
@@ -2704,7 +2706,14 @@
   function playerOrb(autoAim = false) {
     if (isOnlineGuest()) {
       game.online.lastOrbActionAt = performance.now();
-      sendGuestAction('orb', getGuestAimAngle(autoAim));
+      const local = game.enemy;
+      const origin = local
+        ? {
+            x: clamp((local.x - world.play.x) / Math.max(1, world.play.w), 0, 1),
+            y: clamp((local.y - world.play.y) / Math.max(1, world.play.h), 0, 1),
+          }
+        : null;
+      sendGuestAction('orb', getGuestAimAngle(autoAim), { origin });
       return;
     }
     if (!canAct(game.player)) return;
@@ -7648,7 +7657,7 @@
     return Math.atan2(y, x);
   }
 
-  function sendGuestAction(action, angle) {
+  function sendGuestAction(action, angle, extras = null) {
     if (!isOnlineGuest() || game.mode !== 'battle' || game.paused) return;
     const safeAngle = Number.isFinite(angle) ? angle : Math.PI;
     sendOnlineRelay({
@@ -7656,6 +7665,7 @@
       action,
       aim: angleToOnlineDir(safeAngle),
       angle: safeAngle,
+      ...(extras || {}),
     });
   }
 
@@ -7723,6 +7733,15 @@
               ? {
                   x: clamp(data.target.x, 0, 1),
                   y: clamp(data.target.y, 0, 1),
+                }
+              : null,
+          origin:
+            data.origin &&
+            Number.isFinite(data.origin.x) &&
+            Number.isFinite(data.origin.y)
+              ? {
+                  x: clamp(data.origin.x, 0, 1),
+                  y: clamp(data.origin.y, 0, 1),
                 }
               : null,
         });
@@ -8043,9 +8062,18 @@
       if (Number.isFinite(fighter.facing)) fighter.facing = mapAngle(fighter.facing);
       if (Number.isFinite(fighter.aimAngle)) fighter.aimAngle = mapAngle(fighter.aimAngle);
       if (fighter.swing) {
-        for (const key of ['startAngle', 'endAngle', 'targetAngle']) {
-          if (Number.isFinite(fighter.swing[key])) fighter.swing[key] = mapAngle(fighter.swing[key]);
+        const swing = fighter.swing;
+        const sweep = Number.isFinite(swing.endAngle) && Number.isFinite(swing.startAngle)
+          ? swing.endAngle - swing.startAngle
+          : null;
+        if (Number.isFinite(swing.startAngle)) {
+          swing.startAngle = mapAngle(swing.startAngle);
+          // 跨越 ±π 时分别映射起止角会让刀光绕成整圈；保留原始扫角。
+          if (sweep !== null) swing.endAngle = swing.startAngle + sweep;
+        } else if (Number.isFinite(swing.endAngle)) {
+          swing.endAngle = mapAngle(swing.endAngle);
         }
+        if (Number.isFinite(swing.targetAngle)) swing.targetAngle = mapAngle(swing.targetAngle);
       }
     };
 
@@ -8262,7 +8290,15 @@
           tryMelee(fighter, autoAngle);
         }
       } else if (entry.action === 'orb') {
-        if (canAct(fighter) && !tryCounter(fighter)) tryOrb(fighter, entry.angle);
+        if (canAct(fighter) && !tryCounter(fighter)) {
+          const origin = entry.origin
+            ? {
+                x: world.play.x + entry.origin.x * world.play.w,
+                y: world.play.y + entry.origin.y * world.play.h,
+              }
+            : null;
+          tryOrb(fighter, entry.angle, origin);
+        }
       } else if (entry.action === 'dodge') {
         if (canAct(fighter)) tryDodge(fighter, entry.angle);
       } else if (entry.action === 'gather') {
