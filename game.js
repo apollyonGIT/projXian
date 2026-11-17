@@ -7659,7 +7659,7 @@
           ? dist(previousNetX, previousNetY, fighter.netX, fighter.netY)
           : 0;
       // 服务端位置突然大跳（缩地、击飞、重生）时直接接管；普通行走误差交给预测。
-      if (netJump > 130 * world.scale) {
+      if (netJump > 220 * world.scale) {
         fighter.x = fighter.netX;
         fighter.y = fighter.netY;
       } else if (jump < 185 * world.scale) {
@@ -7836,13 +7836,13 @@
         local.aimAngle = aim;
         local.facing = aim;
         if (!local.moving && Number.isFinite(local.netX) && Number.isFinite(local.netY)) {
-          // 停步后轻微回收预测位移，避免长期停住时与房主位置分叉。
+          // 只修很小的静止误差；拉回大误差会把“预测领先”变成回弹。
           const dx = local.netX - local.x;
           const dy = local.netY - local.y;
           const error = Math.hypot(dx, dy);
-          if (error > 4 * world.scale) {
-            local.x += dx * blend * 0.3;
-            local.y += dy * blend * 0.3;
+          if (error > 3 * world.scale && error < 22 * world.scale) {
+            local.x += dx * blend * 0.2;
+            local.y += dy * blend * 0.2;
           }
         }
       } else if (Number.isFinite(local.netX) && Number.isFinite(local.netY)) {

@@ -2,8 +2,10 @@
 
 《问道·斗法》的最新联机版本：保留完整的卡牌、精魄、反制、眩晕、增益与单机 AI 规则，并增加房间号 1v1。
 
-**线上地址**：<https://wendao-doufa.onrender.com>  
+**线上地址**：<https://wendao-doufa-sg.onrender.com>  
 **GitHub**：<https://github.com/apollyonGIT/projXian>
+
+> 联机服务器必须部署在 **Singapore** 区域。美国 Oregon/SF 节点到国内实测 RTT 约 600–900ms，房主权威同步会明显卡顿。
 
 ## 开始游戏
 
@@ -30,12 +32,12 @@ npm start
 
 本项目已配置 Render：
 
-- `render.yaml` — Render Blueprint
+- `render.yaml` — Render Blueprint，服务名 `wendao-doufa-sg`，区域 `singapore`
 - `server.js` — Node 静态托管 + WebSocket 房间中继
 - `Procfile` — Railway / 兼容平台
 - 一键部署：<https://render.com/deploy?repo=https://github.com/apollyonGIT/projXian>
 
-推送到 GitHub `main` 后，Render 会自动重新部署。
+推送到 GitHub `main` 后，Render 会自动重新部署。已有美国节点不会自动切换区域，需要新建 Singapore 服务。
 
 ## 说明
 
