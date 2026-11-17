@@ -504,6 +504,10 @@
       lastOrbActionAt: 0,
       cardSignature: '',
       hostMoveSpeedPercent: 100,
+      rtt: 0,
+      lastPingAt: 0,
+      pingSeq: 0,
+      orbPreview: null,
       bgWorker: null,
       bgWorkerUrl: null,
       bgAccumulator: 0,
@@ -2696,17 +2700,59 @@
 
   function playerMelee(autoAim = false) {
     if (isOnlineGuest()) {
-      sendGuestAction('melee', getGuestAimAngle(autoAim));
+      const angle = getGuestAimAngle(autoAim);
+      sendGuestAction('melee', angle);
+      startGuestMeleePreview(angle);
       return;
     }
     if (!canAct(game.player)) return;
     tryMelee(game.player, getPlayerMeleeAngle(getPlayerAimAngle(autoAim)));
   }
 
+  function startGuestMeleePreview(angle) {
+    const local = game.enemy;
+    if (
+      !isOnlineGuest() ||
+      !local ||
+      !canAct(local) ||
+      local.swing ||
+      local.dodgeRemaining > 0 ||
+      local.throwRemaining > 0
+    ) {
+      return;
+    }
+    const safeAngle = Number.isFinite(angle) ? angle : getGuestAimAngle(true);
+    local.facing = safeAngle;
+    local.aimAngle = safeAngle;
+    local.walkPhase += 0.35;
+    local.swing = {
+      elapsed: 0,
+      duration: CONFIG.meleeDuration,
+      hitAt: CONFIG.meleeHitAt,
+      resolved: true,
+      preview: true,
+      startAngle: safeAngle - CONFIG.meleeArc / 2,
+      endAngle: safeAngle + CONFIG.meleeArc / 2,
+      empowered: false,
+      targetAngle: safeAngle,
+      clashed: false,
+      autoAim: false,
+    };
+  }
+
   function playerOrb(autoAim = false) {
     if (isOnlineGuest()) {
       game.online.lastOrbActionAt = performance.now();
       const local = game.enemy;
+      game.online.orbPreview = local
+        ? {
+            elapsed: 0,
+            duration: 0.18,
+            angle: getGuestAimAngle(autoAim),
+            x: local.x,
+            y: local.y,
+          }
+        : null;
       const origin = local
         ? {
             x: clamp((local.x - world.play.x) / Math.max(1, world.play.w), 0, 1),
@@ -4086,6 +4132,9 @@
     }
     if (isOnlineGuest() && game.mode === 'battle') {
       sendGuestInput();
+    }
+    if ((isOnlineHost() || isOnlineGuest()) && game.mode === 'battle') {
+      maybeSendOnlinePing(now);
     }
 
     renderGame();
@@ -5809,6 +5858,36 @@
     ctx.restore();
   }
 
+  function drawGuestOrbPreview() {
+    const preview = game.online.orbPreview;
+    const local = game.enemy;
+    if (!preview || !local || !isOnlineGuest()) return;
+    const progress = clamp(preview.elapsed / preview.duration, 0, 1);
+    const alpha = (1 - progress) * 0.9;
+    const s = world.scale;
+    const angle = preview.angle;
+    const handX = local.x + Math.cos(angle) * (local.radius + 12 * s);
+    const handY = local.y - 12 * s + Math.sin(angle) * (local.radius + 12 * s);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = alpha;
+    const glow = ctx.createRadialGradient(handX, handY, 0, handX, handY, 18 * s);
+    glow.addColorStop(0, 'rgba(255,246,220,0.9)');
+    glow.addColorStop(0.4, 'rgba(230,180,120,0.45)');
+    glow.addColorStop(1, 'rgba(210,150,100,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(handX, handY, 18 * s, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(255,232,190,${alpha * 0.7})`;
+    ctx.lineWidth = 1.8 * s;
+    ctx.beginPath();
+    ctx.moveTo(handX, handY);
+    ctx.lineTo(handX + Math.cos(angle) * 26 * s, handY + Math.sin(angle) * 26 * s);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function renderGame() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, viewW, viewH);
@@ -5859,6 +5938,7 @@
       }
     }
 
+    drawGuestOrbPreview();
     drawGiantSwords();
     drawEffects();
     drawFloaters();
@@ -6060,7 +6140,13 @@
     updateStealPlusBadges();
 
     if (game.online.active && game.online.code) {
-      setText(dom.memoryNote, `联机 · 房间 ${game.online.code}`);
+      const transport = game.online.rtc.ready
+        ? '直连'
+        : game.online.rtc.pc
+          ? '连接中'
+          : '中继';
+      const rtt = game.online.rtt > 0 ? ` ${Math.round(game.online.rtt)}ms` : '';
+      setText(dom.memoryNote, `联机 · ${transport}${rtt} · ${game.online.code}`);
     } else {
       const memory = getPlayerProfile();
       setText(
@@ -7582,6 +7668,18 @@
     return sendOnlineMessage(payload, replacer);
   }
 
+  function maybeSendOnlinePing(now) {
+    if (!game.online.active) return;
+    if (now - game.online.lastPingAt < 1000) return;
+    game.online.lastPingAt = now;
+    game.online.pingSeq += 1;
+    sendOnlineRelay({
+      kind: 'net-ping',
+      seq: game.online.pingSeq,
+      at: performance.now(),
+    });
+  }
+
   function dispatchRtcRelay(data) {
     if (!data || typeof data !== 'object') return;
     // 房间内就要能收到 start；不能依赖 active（active 在开局后才为真）。
@@ -7700,6 +7798,16 @@
       return;
     }
     if (!game.online.active) return;
+    if (data.kind === 'net-ping') {
+      sendOnlineRelay({ kind: 'net-pong', at: data.at });
+      return;
+    }
+    if (data.kind === 'net-pong') {
+      if (Number.isFinite(data.at)) {
+        game.online.rtt = Math.max(0, performance.now() - data.at);
+      }
+      return;
+    }
     if (data.kind === 'input') {
       const remote = game.online.remoteInput;
       remote.up = Boolean(data.up);
@@ -7768,6 +7876,16 @@
       return;
     }
     if (!game.online.active) return;
+    if (data.kind === 'net-ping') {
+      sendOnlineRelay({ kind: 'net-pong', at: data.at });
+      return;
+    }
+    if (data.kind === 'net-pong') {
+      if (Number.isFinite(data.at)) {
+        game.online.rtt = Math.max(0, performance.now() - data.at);
+      }
+      return;
+    }
     if (data.kind === 'snapshot') {
       applyOnlineSnapshot(data.snapshot);
       return;
@@ -7806,6 +7924,10 @@
     game.online.lastOrbActionAt = 0;
     game.online.cardSignature = '';
     game.online.hostMoveSpeedPercent = game.settings.moveSpeedPercent;
+    game.online.rtt = 0;
+    game.online.lastPingAt = 0;
+    game.online.pingSeq = 0;
+    game.online.orbPreview = null;
     game.online.lastSnapshotAt = 0;
     game.online.lastSnapshotReceivedAt = 0;
     game.online.pendingActions.length = 0;
@@ -8014,6 +8136,10 @@
   function installOnlineFighter(incoming, previous) {
     const fighter = incoming || previous;
     if (!fighter) return fighter;
+    // 客机的挥剑预览不能被还没有剑光的快照覆盖。
+    if (previous && previous.swing && previous.swing.preview && !fighter.swing) {
+      fighter.swing = previous.swing;
+    }
     const previousNetX = previous && Number.isFinite(previous.netX) ? previous.netX : null;
     const previousNetY = previous && Number.isFinite(previous.netY) ? previous.netY : null;
     fighter.netX = Number(fighter.x) || 0;
@@ -8151,19 +8277,34 @@
   }
 
   function canPredictGuestMovement(fighter) {
-    return Boolean(
-      fighter &&
-      fighter.hp > 0 &&
-      game.mode === 'battle' &&
-      !game.paused &&
-      !game.endPending &&
-      !game.settingsOpen &&
-      fighter.stunRemaining <= 0 &&
-      fighter.rootTimer <= 0 &&
-      fighter.throwRemaining <= 0 &&
-      fighter.bounceRemaining <= 0 &&
-      fighter.dodgeRemaining <= 0
-    );
+    if (
+      !fighter ||
+      fighter.hp <= 0 ||
+      game.mode !== 'battle' ||
+      game.paused ||
+      game.endPending ||
+      game.settingsOpen ||
+      fighter.stunRemaining > 0 ||
+      fighter.rootTimer > 0 ||
+      fighter.throwRemaining > 0 ||
+      fighter.bounceRemaining > 0 ||
+      fighter.dodgeRemaining > 0
+    ) {
+      return false;
+    }
+    // 近身时以房主权威位置为准，避免双方看到的身位差距被预测放大。
+    const host = game.player;
+    if (
+      host &&
+      Number.isFinite(fighter.netX) &&
+      Number.isFinite(fighter.netY) &&
+      Number.isFinite(host.netX) &&
+      Number.isFinite(host.netY) &&
+      dist(fighter.netX, fighter.netY, host.netX, host.netY) < 190 * world.scale
+    ) {
+      return false;
+    }
+    return true;
   }
 
   function getGuestPredictedMoveSpeed(fighter) {
@@ -8195,6 +8336,16 @@
 
     const local = game.enemy;
     if (local) {
+      if (local.swing && local.swing.preview) {
+        local.swing.elapsed += dt;
+        if (local.swing.elapsed >= local.swing.duration) local.swing = null;
+      }
+      if (game.online.orbPreview) {
+        game.online.orbPreview.elapsed += dt;
+        if (game.online.orbPreview.elapsed >= game.online.orbPreview.duration) {
+          game.online.orbPreview = null;
+        }
+      }
       const move = canPredictGuestMovement(local) ? readMovementInput() : null;
       if (move && (move.x !== 0 || move.y !== 0)) {
         // 客机本地先行：输入不再等待房主往返，服务端快照只负责纠偏。
@@ -9154,6 +9305,8 @@
         localTeam: game.online.localTeam,
         inputSeq: game.online.inputSeq,
         lastSnapshotReceivedAt: game.online.lastSnapshotReceivedAt,
+        rtt: game.online.rtt,
+        orbPreview: Boolean(game.online.orbPreview),
         rtc: {
           supported: rtcSupported(),
           ready: game.online.rtc.ready,
