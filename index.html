@@ -103,12 +103,11 @@
             <div class="control-cell"><kbd>左键</kbd><span>挥剑近战</span></div>
             <div class="control-cell"><kbd>右键</kbd><span>御灵 / 反制</span></div>
             <div class="control-cell"><kbd>空格</kbd><span>贴地闪避</span></div>
-            <div class="control-cell"><kbd>F</kbd><span>聚灵凝魄</span></div>
             <div class="control-cell"><kbd>拖拽</kbd><span>卡牌施放</span></div>
           </div>
 
           <div class="rule-note">
-            <span>气血 200</span><i></i><span>灵力 300</span><i></i><span>精魄为费</span><i></i><span>闪避 2 层</span><i></i><span>拼刀补满闪避</span><i></i><span>近战命中回灵</span>
+            <span>气血 200</span><i></i><span>灵力 100</span><i></i><span>灵力满 100 自动凝魄</span><i></i><span>精魄为费</span><i></i><span>近战命中回灵</span>
           </div>
 
           <div class="start-actions">
@@ -258,14 +257,6 @@
           </span>
           <span class="quick-cd" id="dodgeCd">就绪</span>
         </button>
-        <button type="button" class="quick-btn" id="spiritBtn" aria-label="聚灵，F 键">
-          <span class="quick-glyph">聚</span>
-          <span class="quick-body">
-            <span class="quick-title">聚灵 <kbd>F</kbd></span>
-            <span class="quick-sub" id="spiritSub">100 灵力 → 1 精魄</span>
-          </span>
-          <span class="quick-cd" id="spiritCd">就绪</span>
-        </button>
         <button type="button" class="quick-btn" id="counterBtn" aria-label="反制，右键">
           <span class="quick-glyph">反</span>
           <span class="quick-body">
@@ -287,7 +278,7 @@
       </div>
     </section>
 
-    <div class="field-hint" aria-hidden="true">WASD 移动 · 左键挥剑 · 右键御灵（按住连发 / 刀光时反制） · 空格闪避 · F 聚灵 · 拖动卡牌施放</div>
+    <div class="field-hint" aria-hidden="true">WASD 移动 · 左键挥剑 · 右键御灵（按住连发 / 刀光时反制） · 空格闪避 · 灵力满 100 自动凝魄 · 拖动卡牌施放</div>
   </div>
 
   <script src="game.js" defer></script>

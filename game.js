@@ -24,7 +24,7 @@
   const STEP = 1 / 60;
   const CONFIG = Object.freeze({
     maxHp: 200,
-    maxMana: 300,
+    maxMana: 100,
     // 基础伤害（不含嗜血等增伤）：近战 10，灵子 5。
     meleeDamage: 10,
     orbDamage: 5,
@@ -40,12 +40,11 @@
     manaOnMeleeHit: 60,
     manaOnMeleeClash: 75,
     manaOnClash: 60,
-    // 精魄（“费”）：每 6 秒自动 +1，上限 10；聚灵 100 灵力换 1 精魄。
+    // 精魄（“费”）：灵力满 100 自动凝成 1 点，上限 10；另有每 6 秒自动 +1。
     essenceMax: 10,
     essenceInterval: 6,
     // 桃一局最多使用 3 次。
     healUsesPerMatch: 3,
-    spiritGatherMana: 100,
     // 闪避：1 次，2 秒冷却；冲刺距离翻倍。
     dodgeCooldown: 2,
     dodgeDuration: 0.2,
@@ -330,9 +329,6 @@
     dodgeCd: $('dodgeCd'),
     counterBtn: $('counterBtn'),
     counterCd: $('counterCd'),
-    spiritBtn: $('spiritBtn'),
-    spiritSub: $('spiritSub'),
-    spiritCd: $('spiritCd'),
     essencePips: $('essencePips'),
     essenceValue: $('essenceValue'),
     playerEssenceChip: $('playerEssenceChip'),
@@ -995,7 +991,6 @@
         orbHits: 0,
         damageDealt: 0,
         cardsPlayed: 0,
-        gathers: 0,
       },
     };
   }
@@ -1198,19 +1193,8 @@
     );
   }
 
-  // 出牌与聚灵不受眩晕限制（眩晕时也可以放牌/聚灵）。
+  // 出牌不受眩晕限制（眩晕时也可以放牌）。
   function canUseCards(fighter) {
-    return Boolean(
-      fighter &&
-      fighter.hp > 0 &&
-      game.mode === 'battle' &&
-      !game.paused &&
-      !game.endPending &&
-      !game.settingsOpen
-    );
-  }
-
-  function canGather(fighter) {
     return Boolean(
       fighter &&
       fighter.hp > 0 &&
@@ -1223,40 +1207,6 @@
 
   function canSpend(fighter, cost) {
     return cost <= fighter.mana + 0.0001;
-  }
-
-  // 聚灵：把 100 点灵力凝成 1 点精魄，无冷却；眩晕期间也可以使用。
-  function castSpiritGather(fighter) {
-    if (!fighter || !canGather(fighter)) return false;
-    if (fighter.essence >= CONFIG.essenceMax) {
-      if (fighter === game.player) warnPlayer('精魄已满', true);
-      return false;
-    }
-    if (fighter.mana < CONFIG.spiritGatherMana) {
-      if (fighter === game.player) {
-        warnPlayer(
-          `灵力不足 · 聚灵需 ${CONFIG.spiritGatherMana} 灵力（当前 ${Math.floor(fighter.mana)}）`,
-          true
-        );
-      }
-      return false;
-    }
-    fighter.mana -= CONFIG.spiritGatherMana;
-    fighter.essence = Math.min(CONFIG.essenceMax, fighter.essence + 1);
-    if (fighter.stats) fighter.stats.gathers += 1;
-    fighter.regenBlocked = CONFIG.regenPauseAfterAttack;
-    spawnRipple(fighter.x, fighter.y, '#d9c48a', 0.5, fighter.radius * 2.2);
-    spawnRipple(fighter.x, fighter.y, '#fff0c4', 0.3, fighter.radius * 1.2);
-    spawnFloater(fighter.x, fighter.y - 58 * world.scale, '+1 精魄', '#ffe6a8', 0.9, 15);
-    game.combatLog.push({
-      team: fighter.team,
-      type: 'gather',
-      time: Number(game.battleTime.toFixed(2)),
-      meleeCombo: fighter.meleeCombo,
-      rangedCombo: fighter.rangedCombo,
-    });
-    if (game.combatLog.length > 30) game.combatLog.shift();
-    return true;
   }
 
   function tryMelee(fighter, angle) {
@@ -1336,12 +1286,6 @@
     }
     if (fighter.orbCooldown > 0) return false;
     const cost = getOrbCost(fighter);
-    if (!canSpend(fighter, cost)) {
-      if (fighter === game.player) {
-        warnPlayer(`灵力不足 · 御灵需 ${cost} 灵力`, true);
-      }
-      return false;
-    }
 
     fighter.meditationTimer = 0;
     fighter.regenBlocked = CONFIG.regenPauseAfterAttack;
@@ -2087,22 +2031,36 @@
     spawnInkSplash(target.x, target.y - 22 * world.scale, target.palette, 7);
   }
 
-  function restoreMana(fighter, amount) {
-    if (!fighter) return 0;
-    const before = fighter.mana;
-    fighter.mana = Math.min(fighter.maxMana, fighter.mana + amount);
-    const gained = Math.max(0, fighter.mana - before);
-    if (gained > 0.05) {
+  function addMana(fighter, amount, showGain = true) {
+    if (!fighter || !Number.isFinite(amount) || amount <= 0) return 0;
+    fighter.mana += amount;
+    let converted = 0;
+    // 灵力达到 100 就自动凝魄；保留溢出，避免 90 + 60 这类回复丢失。
+    while (fighter.mana >= CONFIG.maxMana - 0.000001 && converted < 8) {
+      fighter.mana -= CONFIG.maxMana;
+      converted += 1;
+      if (fighter.essence < CONFIG.essenceMax) {
+        fighter.essence += 1;
+        spawnFloater(fighter.x, fighter.y - 58 * world.scale, '+1 精魄', '#ffe6a8', 0.9, 14);
+        spawnRipple(fighter.x, fighter.y, '#ffe6a8', 0.36, fighter.radius * 1.9);
+      }
+    }
+    fighter.mana = clamp(fighter.mana, 0, fighter.maxMana);
+    if (showGain && amount > 0.05) {
       spawnFloater(
         fighter.x,
         fighter.y - 62 * world.scale,
-        `+${Math.round(gained)} 灵力`,
+        `+${Math.round(amount)} 灵力`,
         '#a9d7ff',
         0.9,
         14
       );
     }
-    return gained;
+    return amount;
+  }
+
+  function restoreMana(fighter, amount) {
+    return addMana(fighter, amount, true);
   }
 
   function destroyProjectile(projectile, effect = true) {
@@ -2878,7 +2836,6 @@
       attackDelay: 0.3,
       // AI 手速上限：两张牌之间至少间隔 1.5 秒。
       cardCooldown: 0,
-      gatherCooldown: 0,
       lastAttackAt: -10,
       lastMeleeAt: -Infinity,
       meleeWaitUntil: 0,
@@ -3098,11 +3055,10 @@
     const liveMeleeLOS = hasMeleeLine(actor, player);
     const liveShotLOS = hasProjectileLine(actor, player);
     const meleeCost = getMeleeCost(actor);
-    const orbCost = getOrbCost(actor);
     const canMelee =
       liveMeleeLOS && meleeLOS && inMelee && actor.meleeCooldown <= 0 && canSpend(actor, meleeCost) && aiCanHitWithMelee();
     const atRefreshCap = actor.rangedCombo >= CONFIG.orbRefreshCombo;
-    const canOrb = liveShotLOS && shotLOS && actor.orbCooldown <= 0 && canSpend(actor, orbCost) && !atRefreshCap;
+    const canOrb = liveShotLOS && shotLOS && actor.orbCooldown <= 0 && !atRefreshCap;
     const angle = Math.atan2(player.y - 12 * world.scale - (actor.y - 12 * world.scale), player.x - actor.x);
 
     // 已决定近战但 1 秒间隔未到：原地等待，期间不御灵。
@@ -3124,7 +3080,6 @@
         if (actor.rangedCombo >= 3) meleeWeight += 0.1;
         if (actor.meleeCombo >= 2) orbWeight += 0.16;
         if (player.hp / player.maxHp < 0.3) meleeWeight += 0.1;
-        if (actor.mana < 24) orbWeight -= 0.18;
         const total = meleeWeight + orbWeight;
         chooseMelee = Math.random() < meleeWeight / total;
       } else {
@@ -3159,10 +3114,6 @@
     if (aiState.attackDelay > 0) return false;
     if (actor.rangedCombo >= CONFIG.orbRefreshCombo) return false;
     if (actor.orbCooldown > 0) return false;
-    const cost = getOrbCost(actor);
-    if (!canSpend(actor, cost)) return false;
-    if (cost > 0 && actor.mana - cost < 5 && player.hp > CONFIG.orbDamage) return false;
-
     const distance = distanceBetweenFighters();
     // 近战等待期间不御灵（玩家拉开距离后解除）。
     if (
@@ -3752,24 +3703,6 @@
     }
   }
 
-  // AI 用灵力聚精魄：灵力充裕且暂时安全时执行。
-  function aiTryGather() {
-    const aiState = game.ai;
-    const actor = game.enemy;
-    const player = game.player;
-    if (!aiState || !actor || !player) return false;
-    if (aiState.gatherCooldown > 0) return false;
-    if (actor.essence >= CONFIG.essenceMax) return false;
-    if (actor.mana < 170) return false;
-    if (!canGather(actor)) return false;
-    if (player.swing && !player.swing.resolved) return false;
-    if (findThreatProjectile(actor, player)) return false;
-    if (!castSpiritGather(actor)) return false;
-    aiState.gatherCooldown = 2.4;
-    aiState.lastReason = '聚灵';
-    return true;
-  }
-
   // AI 出牌策略：按局势从手牌里挑一张最合适的。
   function aiCardPlan() {
     const actor = game.enemy;
@@ -3886,7 +3819,6 @@
     aiState.thinkTimer -= dt;
     aiState.attackDelay = Math.max(0, aiState.attackDelay - dt);
     aiState.cardCooldown = Math.max(0, aiState.cardCooldown - dt);
-    aiState.gatherCooldown = Math.max(0, aiState.gatherCooldown - dt);
     aiState.strafeTimer -= dt;
     aiState.hideTimer -= dt;
     aiState.approachAge += dt;
@@ -3897,9 +3829,8 @@
 
     if (!canAct(actor)) {
       actor.moving = false;
-      // 眩晕时仍然可以聚灵/出牌。
+      // 眩晕时仍然可以出牌。
       if (actor.stunRemaining > 0) {
-        if (aiTryGather()) return;
         aiTryPlayCard();
       }
       return;
@@ -3931,8 +3862,7 @@
       if (assessAIThreats()) return;
     }
 
-    // AI 也会聚灵与出牌。
-    if (aiTryGather()) return;
+    // AI 也会根据局势出牌。
     if (aiTryPlayCard()) return;
 
     if (aiState.thinkTimer <= 0) {
@@ -4012,7 +3942,7 @@
       // 被动回灵：站定 40 / 秒，移动 20 / 秒；出招后的 0.5 秒内停止回复。
       if (fighter.regenBlocked <= 0) {
         const rate = fighter.moving ? CONFIG.manaRegenMoving : CONFIG.manaRegenIdle;
-        fighter.mana = Math.min(fighter.maxMana, fighter.mana + rate * dt);
+        addMana(fighter, rate * dt, false);
       }
       // 精魄：每 6 秒自动 +1，上限 10。
       if (fighter.essence < CONFIG.essenceMax) {
@@ -6309,14 +6239,6 @@
           : '就绪'
     );
 
-    const canGather = local.essence < CONFIG.essenceMax && local.mana >= CONFIG.spiritGatherMana;
-    dom.spiritBtn.classList.toggle('is-empty', !canGather);
-    setText(dom.spiritSub, `100 灵力 → 1 精魄 · 当前 ${Math.floor(local.mana)}`);
-    setText(
-      dom.spiritCd,
-      local.essence >= CONFIG.essenceMax ? '精魄满' : canGather ? '就绪' : '灵力不足'
-    );
-
     const counterReady = (local.counterCooldown || 0) <= 0.001;
     if (dom.counterBtn) dom.counterBtn.classList.toggle('is-empty', !counterReady);
     setText(dom.counterCd, counterReady ? '就绪' : `${(local.counterCooldown || 0).toFixed(1)}s`);
@@ -6794,14 +6716,6 @@
       return;
     }
     playCard(player, card, point);
-  }
-
-  function requestSpiritGather() {
-    if (isOnlineGuest()) {
-      sendGuestAction('gather', getGuestAimAngle(true));
-      return;
-    }
-    castSpiritGather(game.player);
   }
 
   function requestCounter() {
@@ -7783,7 +7697,7 @@
       return;
     }
     if (data.kind === 'action') {
-      const actions = ['melee', 'orb', 'dodge', 'gather', 'counter', 'card'];
+      const actions = ['melee', 'orb', 'dodge', 'counter', 'card'];
       if (!actions.includes(data.action)) return;
       const angle = data.aim
         ? onlineDirToAngle(data.aim, game.online.remoteInput.aimAngle)
@@ -8407,8 +8321,6 @@
         }
       } else if (entry.action === 'dodge') {
         if (canAct(fighter)) tryDodge(fighter, entry.angle);
-      } else if (entry.action === 'gather') {
-        castSpiritGather(fighter);
       } else if (entry.action === 'counter') {
         tryCounter(fighter);
       } else if (entry.action === 'card') {
@@ -8536,14 +8448,6 @@
       dom.restartBtn.disabled = true;
       showToast('已请求再战 · 等待房主开启', '', 1800);
     }
-  }
-
-  function requestLocalMeditation() {
-    if (isOnlineGuest()) {
-      sendGuestAction('gather', getGuestAimAngle(true));
-      return;
-    }
-    castSpiritGather(game.player);
   }
 
   function openSettings() {
@@ -8785,13 +8689,6 @@
       if (game.mode !== 'battle' || game.paused || game.settingsOpen) return;
       playerDodge();
     });
-    dom.spiritBtn.addEventListener('pointerdown', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      dom.spiritBtn.blur();
-      if (game.mode !== 'battle' || game.paused || game.settingsOpen) return;
-      requestLocalMeditation();
-    });
     if (dom.counterBtn) {
       dom.counterBtn.addEventListener('pointerdown', (event) => {
         event.preventDefault();
@@ -8865,9 +8762,6 @@
         if (code === 'Space') {
           event.preventDefault();
           if (!event.repeat) playerDodge();
-        } else if (code === 'KeyF') {
-          event.preventDefault();
-          if (!event.repeat) requestLocalMeditation();
         } else if (
           code === 'Digit1' ||
           code === 'Digit2' ||
@@ -9160,10 +9054,6 @@
           if (game.enemy) game.enemy.stealPlusTimers = [];
           return true;
         },
-        gather(team) {
-          const fighter = team === 'player' ? game.player : game.enemy;
-          if (fighter) castSpiritGather(fighter);
-        },
         playCard(index, x, y) {
           const id = game.cards && game.cards.hand[index];
           const card = cardById(id);
@@ -9236,7 +9126,6 @@
       playerMelee,
       playerOrb,
       playerDodge,
-      gather: () => castSpiritGather(game.player),
       playCard: (index, x, y) => {
         const id = game.cards && game.cards.hand[index];
         const card = cardById(id);
