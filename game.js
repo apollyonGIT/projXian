@@ -40,9 +40,8 @@
     manaOnMeleeClash: 50,
     manaOnClash: 60,
     counterManaCost: 50,
-    // 精魄（“费”）：灵力满 100 自动凝成 1 点，上限 10；另有每 6 秒自动 +1。
+    // 精魄（“费”）：灵力满 100 自动凝成 1 点，上限 10；没有自然回复。
     essenceMax: 10,
-    essenceInterval: 6,
     // 桃一局最多使用 3 次。
     healUsesPerMatch: 3,
     // 闪避：1 次，2 秒冷却；冲刺距离翻倍。
@@ -942,7 +941,6 @@
       mana: CONFIG.maxMana,
       maxMana: CONFIG.maxMana,
       essence: 0,
-      essenceTimer: 0,
       meleeCombo: 0,
       rangedCombo: 0,
       meleeCooldown: 0,
@@ -1132,7 +1130,6 @@
     game.player.hp = CONFIG.maxHp;
     game.player.mana = CONFIG.maxMana;
     game.player.essence = 0;
-    game.player.essenceTimer = 0;
     game.player.dodgeCooldown = 0;
     game.player.swing = null;
     game.player.dodgeRemaining = 0;
@@ -1151,7 +1148,6 @@
     game.enemy.hp = CONFIG.maxHp;
     game.enemy.mana = CONFIG.maxMana;
     game.enemy.essence = 0;
-    game.enemy.essenceTimer = 0;
     game.enemy.dodgeCooldown = 0;
     game.enemy.swing = null;
     game.enemy.dodgeRemaining = 0;
@@ -3950,19 +3946,7 @@
       if (fighter.regenBlocked <= 0) {
         addMana(fighter, CONFIG.manaRegenPerSecond * dt, false);
       }
-      // 精魄：每 6 秒自动 +1，上限 10。
-      if (fighter.essence < CONFIG.essenceMax) {
-        fighter.essenceTimer += dt;
-        while (fighter.essenceTimer >= CONFIG.essenceInterval && fighter.essence < CONFIG.essenceMax) {
-          fighter.essenceTimer -= CONFIG.essenceInterval;
-          fighter.essence += 1;
-          if (fighter === game.player) {
-            spawnFloater(fighter.x, fighter.y - 58 * world.scale, '+1 精魄', '#ffe6a8', 0.8, 13);
-          }
-        }
-      } else {
-        fighter.essenceTimer = 0;
-      }
+      // 精魄没有自然回复，只能由灵力满 100 或卡牌效果获得。
       // 桃：持续回血。
       if (fighter.healRemaining > 0) {
         const step = Math.min(fighter.healRemaining, dt);
