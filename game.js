@@ -508,6 +508,20 @@
       bgWorkerUrl: null,
       bgAccumulator: 0,
       bgLastTick: 0,
+      rtc: {
+        pc: null,
+        channel: null,
+        ready: false,
+        state: 'idle',
+        remoteSet: false,
+        pendingIce: [],
+        chunks: new Map(),
+        chunkSeq: 0,
+        sent: 0,
+        received: 0,
+        fallbackNotified: false,
+        fallbackTimer: 0,
+      },
       connectPromise: null,
       remoteInput: {
         up: false,
@@ -6897,6 +6911,18 @@
   const ONLINE_CODE_LENGTH = 5;
   const ONLINE_INPUT_INTERVAL = 33;
   const ONLINE_SNAPSHOT_INTERVAL = 33;
+  const RTC_CHUNK_SIZE = 16 * 1024;
+  const RTC_ICE_SERVERS = [
+    {
+      urls: [
+        'stun:stun.l.google.com:19302',
+        'stun:stun1.l.google.com:19302',
+        'stun:stun.cloudflare.com:3478',
+        'stun:stun.miwifi.com:3478',
+        'stun:stun.qq.com:3478',
+      ],
+    },
+  ];
 
   function normalizeOnlineCode(value) {
     return String(value || '')
@@ -7182,11 +7208,13 @@
     if (message.t === 'peer-joined') {
       game.online.peerJoined = true;
       updateOnlineRoomUi();
+      startRtcHost();
       return;
     }
 
     if (message.t === 'peer-left') {
       game.online.peerJoined = false;
+      closeOnlineRtc();
       if (game.online.active) {
         handleOnlinePeerLost();
         return;
@@ -7221,6 +7249,7 @@
   }
 
   function handleOnlineSocketClose() {
+    closeOnlineRtc();
     if (game.online.leaving) {
       game.online.leaving = false;
       return;
@@ -7240,6 +7269,7 @@
 
   async function createOnlineRoom() {
     setOnlineError('');
+    closeOnlineRtc();
     if (window.location.protocol === 'file:') {
       setOnlineError('联机版必须通过部署后的网址打开，不能直接双击本地文件。');
       return;
@@ -7261,6 +7291,7 @@
 
   async function joinOnlineRoom() {
     setOnlineError('');
+    closeOnlineRtc();
     const code = normalizeOnlineCode(dom.onlineCodeInput.value);
     dom.onlineCodeInput.value = code;
     if (code.length !== ONLINE_CODE_LENGTH) {
@@ -7297,8 +7328,306 @@
     }
   }
 
+  function rtcSupported() {
+    return typeof window.RTCPeerConnection === 'function';
+  }
+
+  function rtcChannelOpen() {
+    const rtc = game.online.rtc;
+    return Boolean(rtc.ready && rtc.channel && rtc.channel.readyState === 'open');
+  }
+
+  function sendOnlineSignaling(data) {
+    return sendOnlineMessage({ t: 'relay', d: data });
+  }
+
+  function notifyRtcFallback() {
+    const rtc = game.online.rtc;
+    if (rtc.fallbackNotified || rtc.ready) return;
+    rtc.fallbackNotified = true;
+    if (game.online.lobbyOpen || game.online.active) {
+      showToast('点对点直连未建立，已改用服务器中继', 'warn', 2800);
+    }
+  }
+
+  function closeOnlineRtc() {
+    const rtc = game.online.rtc;
+    if (!rtc) return;
+    if (rtc.fallbackTimer) {
+      window.clearTimeout(rtc.fallbackTimer);
+      rtc.fallbackTimer = 0;
+    }
+    if (rtc.channel) {
+      rtc.channel.onopen = null;
+      rtc.channel.onclose = null;
+      rtc.channel.onerror = null;
+      rtc.channel.onmessage = null;
+      try {
+        rtc.channel.close();
+      } catch (error) {
+        // ignore
+      }
+    }
+    if (rtc.pc) {
+      rtc.pc.onicecandidate = null;
+      rtc.pc.ondatachannel = null;
+      rtc.pc.onconnectionstatechange = null;
+      rtc.pc.oniceconnectionstatechange = null;
+      try {
+        rtc.pc.close();
+      } catch (error) {
+        // ignore
+      }
+    }
+    rtc.pc = null;
+    rtc.channel = null;
+    rtc.ready = false;
+    rtc.state = 'idle';
+    rtc.remoteSet = false;
+    rtc.pendingIce = [];
+    rtc.chunks.clear();
+    rtc.fallbackNotified = false;
+  }
+
+  function queueRtcIce(candidate) {
+    if (!candidate) return;
+    const rtc = game.online.rtc;
+    if (!rtc.pc || !rtc.remoteSet) {
+      rtc.pendingIce.push(candidate);
+      return;
+    }
+    rtc.pc.addIceCandidate(candidate).catch(() => {});
+  }
+
+  function flushRtcIce() {
+    const rtc = game.online.rtc;
+    if (!rtc.pc || !rtc.remoteSet) return;
+    const candidates = rtc.pendingIce.splice(0);
+    for (const candidate of candidates) {
+      rtc.pc.addIceCandidate(candidate).catch(() => {});
+    }
+  }
+
+  function setupRtcChannel(channel) {
+    const rtc = game.online.rtc;
+    rtc.channel = channel;
+    channel.onopen = () => {
+      if (game.online.rtc.channel !== channel) return;
+      rtc.ready = true;
+      rtc.state = 'open';
+      if (rtc.fallbackTimer) {
+        window.clearTimeout(rtc.fallbackTimer);
+        rtc.fallbackTimer = 0;
+      }
+      if (game.online.lobbyOpen || game.online.active) {
+        showToast('点对点直连已建立', '', 1600);
+      }
+    };
+    channel.onclose = () => {
+      if (game.online.rtc.channel !== channel) return;
+      const wasReady = rtc.ready;
+      rtc.ready = false;
+      rtc.state = 'closed';
+      if (wasReady && game.online.active) {
+        showToast('点对点直连断开，已切回服务器中继', 'warn', 2200);
+      }
+    };
+    channel.onerror = () => {
+      rtc.ready = false;
+      rtc.state = 'error';
+    };
+    channel.onmessage = (event) => handleRtcChannelMessage(event);
+  }
+
+  function createRtcPeer(isHost) {
+    if (!rtcSupported()) return null;
+    const rtc = game.online.rtc;
+    const pc = new RTCPeerConnection({ iceServers: RTC_ICE_SERVERS });
+    rtc.pc = pc;
+    rtc.ready = false;
+    rtc.state = 'connecting';
+    rtc.remoteSet = false;
+    pc.onicecandidate = (event) => {
+      if (event.candidate) sendOnlineSignaling({ kind: 'rtc-ice', candidate: event.candidate });
+    };
+    pc.ondatachannel = (event) => {
+      if (!isHost) setupRtcChannel(event.channel);
+    };
+    pc.onconnectionstatechange = () => {
+      if (game.online.rtc.pc !== pc) return;
+      rtc.state = pc.connectionState;
+      if (pc.connectionState === 'failed') {
+        rtc.ready = false;
+        notifyRtcFallback();
+      } else if (pc.connectionState === 'connected') {
+        rtc.state = 'connected';
+      }
+    };
+    pc.oniceconnectionstatechange = () => {
+      if (game.online.rtc.pc !== pc) return;
+      if (pc.iceConnectionState === 'failed') {
+        rtc.ready = false;
+        notifyRtcFallback();
+      }
+    };
+    if (rtc.fallbackTimer) window.clearTimeout(rtc.fallbackTimer);
+    rtc.fallbackTimer = window.setTimeout(() => {
+      if (!rtc.ready) notifyRtcFallback();
+    }, 9000);
+    return pc;
+  }
+
+  async function startRtcHost() {
+    if (game.online.role !== 'host' || !game.online.peerJoined || !rtcSupported()) return;
+    const rtc = game.online.rtc;
+    if (rtc.pc && rtc.pc.connectionState !== 'closed') return;
+    closeOnlineRtc();
+    const pc = createRtcPeer(true);
+    if (!pc) return;
+    setupRtcChannel(pc.createDataChannel('wendao', { ordered: true }));
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      sendOnlineSignaling({ kind: 'rtc-offer', description: pc.localDescription });
+    } catch (error) {
+      rtc.state = 'offer-failed';
+      notifyRtcFallback();
+    }
+  }
+
+  async function acceptRtcOffer(description) {
+    if (game.online.role !== 'guest' || !rtcSupported() || !description) return;
+    const rtc = game.online.rtc;
+    if (rtc.pc && rtc.pc.connectionState !== 'closed') return;
+    // 保留 offer 到达前先收到的 ICE candidate。
+    const earlyIce = rtc.pendingIce.slice();
+    closeOnlineRtc();
+    rtc.pendingIce = earlyIce;
+    const pc = createRtcPeer(false);
+    if (!pc) return;
+    try {
+      await pc.setRemoteDescription(description);
+      rtc.remoteSet = true;
+      flushRtcIce();
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      sendOnlineSignaling({ kind: 'rtc-answer', description: pc.localDescription });
+    } catch (error) {
+      rtc.state = 'answer-failed';
+      notifyRtcFallback();
+    }
+  }
+
+  async function acceptRtcAnswer(description) {
+    if (game.online.role !== 'host' || !description) return;
+    const rtc = game.online.rtc;
+    if (!rtc.pc) return;
+    try {
+      await rtc.pc.setRemoteDescription(description);
+      rtc.remoteSet = true;
+      flushRtcIce();
+    } catch (error) {
+      rtc.state = 'answer-apply-failed';
+      notifyRtcFallback();
+    }
+  }
+
+  function sendP2pPayload(payload, replacer = null) {
+    const rtc = game.online.rtc;
+    const channel = rtc.channel;
+    if (!rtc.ready || !channel || channel.readyState !== 'open') return false;
+    try {
+      if (payload.d && payload.d.kind === 'snapshot' && channel.bufferedAmount > 512 * 1024) {
+        return true;
+      }
+      const text = JSON.stringify(payload, replacer);
+      if (text.length <= RTC_CHUNK_SIZE) {
+        channel.send(text);
+      } else {
+        const id = ++rtc.chunkSeq;
+        const total = Math.ceil(text.length / RTC_CHUNK_SIZE);
+        for (let index = 0; index < total; index += 1) {
+          channel.send(
+            JSON.stringify({
+              t: 'chunk',
+              id,
+              index,
+              total,
+              data: text.slice(index * RTC_CHUNK_SIZE, (index + 1) * RTC_CHUNK_SIZE),
+            })
+          );
+        }
+      }
+      rtc.sent += 1;
+      return true;
+    } catch (error) {
+      rtc.ready = false;
+      rtc.state = 'send-failed';
+      return false;
+    }
+  }
+
   function sendOnlineRelay(data, replacer = null) {
-    return sendOnlineMessage({ t: 'relay', d: data }, replacer);
+    const payload = { t: 'relay', d: data };
+    if (sendP2pPayload(payload, replacer)) return true;
+    return sendOnlineMessage(payload, replacer);
+  }
+
+  function dispatchRtcRelay(data) {
+    if (!data || typeof data !== 'object') return;
+    // 房间内就要能收到 start；不能依赖 active（active 在开局后才为真）。
+    if (game.online.role === 'host') handleGuestRelay(data);
+    else if (game.online.role === 'guest') handleHostRelay(data);
+  }
+
+  function handleRtcChannelMessage(event) {
+    if (typeof event.data !== 'string') return;
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch (error) {
+      return;
+    }
+    if (!message || typeof message !== 'object') return;
+    const rtc = game.online.rtc;
+    rtc.received += 1;
+    if (message.t === 'relay') {
+      dispatchRtcRelay(message.d);
+      return;
+    }
+    if (message.t === 'chunk') {
+      const id = Number(message.id);
+      const index = Number(message.index);
+      const total = Number(message.total);
+      if (!Number.isInteger(id) || !Number.isInteger(index) || !Number.isInteger(total)) return;
+      if (index < 0 || index >= total || total <= 0 || total > 4096 || typeof message.data !== 'string') {
+        return;
+      }
+      let entry = rtc.chunks.get(id);
+      if (!entry) {
+        entry = { parts: new Array(total), received: 0, total, at: Date.now() };
+        rtc.chunks.set(id, entry);
+      }
+      if (entry.total !== total || entry.parts[index] !== undefined) return;
+      entry.parts[index] = message.data;
+      entry.received += 1;
+      if (entry.received >= total) {
+        rtc.chunks.delete(id);
+        const text = entry.parts.join('');
+        try {
+          const assembled = JSON.parse(text);
+          if (assembled && assembled.t === 'relay') dispatchRtcRelay(assembled.d);
+        } catch (error) {
+          // ignore malformed chunk set
+        }
+      }
+      if (rtc.chunks.size > 8) {
+        const cutoff = Date.now() - 10000;
+        for (const [key, value] of rtc.chunks) {
+          if (value.at < cutoff) rtc.chunks.delete(key);
+        }
+      }
+    }
   }
 
   function angleToOnlineDir(angle) {
@@ -7351,7 +7680,16 @@
   }
 
   function handleGuestRelay(data) {
-    if (!data || typeof data !== 'object' || !isOnlineHost()) return;
+    if (!data || typeof data !== 'object' || game.online.role !== 'host') return;
+    if (data.kind === 'rtc-answer') {
+      acceptRtcAnswer(data.description);
+      return;
+    }
+    if (data.kind === 'rtc-ice') {
+      queueRtcIce(data.candidate);
+      return;
+    }
+    if (!game.online.active) return;
     if (data.kind === 'input') {
       const remote = game.online.remoteInput;
       remote.up = Boolean(data.up);
@@ -7398,6 +7736,14 @@
 
   function handleHostRelay(data) {
     if (!data || typeof data !== 'object' || game.online.role !== 'guest') return;
+    if (data.kind === 'rtc-offer') {
+      acceptRtcOffer(data.description);
+      return;
+    }
+    if (data.kind === 'rtc-ice') {
+      queueRtcIce(data.candidate);
+      return;
+    }
     if (data.kind === 'start') {
       beginOnlineBattle('guest');
       return;
@@ -7476,6 +7822,7 @@
   function leaveOnlineRoom({ toStart = true, silent = false } = {}) {
     const hadRoom = Boolean(game.online.role || game.online.code);
     stopOnlineBackgroundTicker();
+    closeOnlineRtc();
     game.online.leaving = true;
     if (game.online.socket && game.online.socket.readyState === WebSocket.OPEN) {
       try {
@@ -8771,6 +9118,14 @@
         localTeam: game.online.localTeam,
         inputSeq: game.online.inputSeq,
         lastSnapshotReceivedAt: game.online.lastSnapshotReceivedAt,
+        rtc: {
+          supported: rtcSupported(),
+          ready: game.online.rtc.ready,
+          state: game.online.rtc.state,
+          pcState: game.online.rtc.pc ? game.online.rtc.pc.connectionState : 'none',
+          sent: game.online.rtc.sent,
+          received: game.online.rtc.received,
+        },
       }),
     };
 
