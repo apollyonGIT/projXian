@@ -809,6 +809,11 @@
   function captureKeybind(code) {
     const action = keybindState.listening;
     if (!action) return;
+    if (['up', 'down', 'left', 'right'].includes(action) && code.startsWith('Mouse')) {
+      keybindState.status = '移动方向只能绑定键盘按键，请再按一个键盘键。';
+      renderKeybindScreen();
+      return;
+    }
     game.bindings[action] = code;
     saveBindings();
     const def = keybindDef(action);
