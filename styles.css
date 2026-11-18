@@ -2619,6 +2619,30 @@ input[type="range"]::-moz-range-thumb {
   white-space: nowrap;
 }
 
+.keycap {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 5px;
+  border: 1px solid rgba(93, 196, 255, 0.58);
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(31, 42, 44, 0.98), rgba(5, 10, 12, 0.98));
+  box-shadow:
+    0 2px 0 rgba(0, 0, 0, 0.72),
+    0 0 9px rgba(45, 154, 255, 0.22),
+    inset 0 0 9px rgba(80, 190, 255, 0.12);
+  color: #a9e9ff;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-shadow: 0 0 7px rgba(90, 200, 255, 0.72);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .game-card {
   --tone: #c8ae74;
   position: relative;
@@ -2626,7 +2650,7 @@ input[type="range"]::-moz-range-thumb {
   flex-direction: column;
   width: clamp(96px, 8.4vw, 138px);
   min-height: clamp(138px, 12.6vw, 194px);
-  padding: 10px 9px 9px;
+  padding: 37px 9px 9px;
   border: 1px solid rgba(200, 174, 116, 0.42);
   border-radius: 12px;
   background:
@@ -2702,8 +2726,8 @@ input[type="range"]::-moz-range-thumb {
 
 .card-timer {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 40px;
+  right: 6px;
   padding: 1px 5px;
   border-radius: 999px;
   background: rgba(26, 16, 34, 0.88);
@@ -2714,13 +2738,140 @@ input[type="range"]::-moz-range-thumb {
   pointer-events: none;
 }
 
+.keybind-panel {
+  width: min(660px, 100%);
+}
+
+.keybind-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 18px;
+  margin-top: 24px;
+  text-align: left;
+}
+
+.keybind-group {
+  padding: 12px;
+  border: 1px solid rgba(200, 174, 116, 0.14);
+  background: rgba(4, 13, 10, 0.45);
+}
+
+.keybind-group h3 {
+  margin: 0 0 9px;
+  color: rgba(232, 221, 193, 0.78);
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+}
+
+.keybind-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.keybind-group:last-child {
+  grid-column: 1 / -1;
+}
+
+.keybind-group:last-child .keybind-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 22px;
+}
+
+.keybind-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.keybind-label {
+  color: rgba(203, 198, 178, 0.72);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.keybind-slot {
+  min-width: 92px;
+  width: auto;
+  height: 29px;
+  padding: 0 9px;
+  pointer-events: auto;
+  cursor: pointer;
+  font-size: 10px;
+  transition: border-color 160ms ease, box-shadow 160ms ease, color 160ms ease;
+}
+
+.keybind-slot:hover {
+  border-color: rgba(144, 221, 255, 0.9);
+  color: #d6f7ff;
+  box-shadow:
+    0 2px 0 rgba(0, 0, 0, 0.72),
+    0 0 15px rgba(70, 177, 255, 0.4),
+    inset 0 0 12px rgba(80, 190, 255, 0.2);
+}
+
+.keybind-slot.is-listening {
+  border-color: rgba(170, 238, 255, 1);
+  color: #ffffff;
+  box-shadow:
+    0 2px 0 rgba(0, 0, 0, 0.72),
+    0 0 22px rgba(70, 177, 255, 0.55),
+    inset 0 0 16px rgba(90, 200, 255, 0.3);
+  animation: keybind-listen 1.2s ease-in-out infinite;
+}
+
+@keyframes keybind-listen {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.38);
+  }
+}
+
+.keybind-tip {
+  margin: 18px 0 0;
+  color: rgba(172, 168, 150, 0.58);
+  font-size: 9px;
+  line-height: 1.6;
+  text-align: left;
+}
+
+.keybind-tip kbd {
+  padding: 1px 5px;
+  border: 1px solid rgba(200, 174, 116, 0.24);
+  color: rgba(235, 222, 192, 0.85);
+  font-family: var(--font-ui);
+  font-size: 9px;
+}
+
+.keybind-status {
+  min-height: 15px;
+  margin: 8px 0 0;
+  color: rgba(150, 218, 238, 0.82);
+  font-size: 9px;
+  line-height: 1.6;
+  text-align: left;
+}
+
+.keybind-status:empty {
+  margin-top: 0;
+}
+
 .card-cost {
   position: absolute;
-  top: -8px;
-  left: -8px;  display: grid;
+  top: 5px;
+  right: 5px;
+  left: auto;
+  display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   border: 1px solid rgba(255, 236, 180, 0.85);
   border-radius: 50%;
   background: radial-gradient(circle at 40% 35%, #ffe9b0, #b8872f 65%, #6b4a12);
@@ -2729,6 +2880,18 @@ input[type="range"]::-moz-range-thumb {
   font-size: 15px;
   font-weight: 700;
   box-shadow: 0 0 12px rgba(232, 196, 120, 0.55), inset 0 -2px 4px rgba(0, 0, 0, 0.35);
+}
+
+.card-keycap {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 11px;
 }
 
 .card-art {
@@ -2853,6 +3016,18 @@ input[type="range"]::-moz-range-thumb {
 }
 
 @media (max-width: 760px) {
+  .keybind-panel {
+    width: 100%;
+  }
+
+  .keybind-groups {
+    grid-template-columns: 1fr;
+  }
+
+  .keybind-group:last-child .keybind-list {
+    grid-template-columns: 1fr;
+  }
+
   .cardbar {
     bottom: calc(4px + var(--safe-bottom));
   }

@@ -99,10 +99,11 @@
           </p>
 
           <div class="start-controls" aria-label="操作说明">
-            <div class="control-cell"><kbd>W A S D</kbd><span>踏罡移动</span></div>
-            <div class="control-cell"><kbd>左键</kbd><span>挥剑近战</span></div>
-            <div class="control-cell"><kbd>右键</kbd><span>御灵 / 反制</span></div>
-            <div class="control-cell"><kbd>空格</kbd><span>贴地闪避</span></div>
+            <div class="control-cell"><kbd id="controlMoveKeys">W A S D</kbd><span>踏罡移动</span></div>
+            <div class="control-cell"><kbd id="controlMeleeKeys">左键</kbd><span>挥剑近战</span></div>
+            <div class="control-cell"><kbd id="controlOrbKeys">右键</kbd><span>御灵 / 反制</span></div>
+            <div class="control-cell"><kbd id="controlDodgeKeys">空格</kbd><span>贴地闪避</span></div>
+            <div class="control-cell"><kbd id="controlCardKeys">1–5</kbd><span>快捷出牌</span></div>
             <div class="control-cell"><kbd>拖拽</kbd><span>卡牌施放</span></div>
           </div>
 
@@ -114,6 +115,7 @@
             <button type="button" class="primary-button" id="startBtn">踏入论剑台</button>
             <button type="button" class="online-button" id="onlineBtn">联机论剑</button>
             <button type="button" class="ghost-button" id="cardCodexBtn">卡牌仓库</button>
+            <button type="button" class="ghost-button" id="keybindBtn">改键</button>
           </div>
           <p class="memory-line" id="startMemory">此局无旧忆，朱衣客尚不知你的招式。</p>
         </div>
@@ -177,6 +179,22 @@
           <div class="modal-actions">
             <button type="button" class="ghost-button" id="cancelSettingsBtn">取消</button>
             <button type="button" class="primary-button" id="applySettingsBtn">确定并继续</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="keybindScreen" class="screen modal-screen keybind-screen" hidden aria-labelledby="keybindTitle">
+        <div class="modal-panel keybind-panel" role="dialog" aria-modal="true" aria-describedby="keybindDesc">
+          <div class="panel-ornament" aria-hidden="true"></div>
+          <div class="eyebrow">按 键 化 形</div>
+          <h2 id="keybindTitle">改键</h2>
+          <p class="panel-desc" id="keybindDesc">点击任意按键位，再按下一个键盘按键或鼠标键。设置会自动保存。</p>
+          <div id="keybindGroups" class="keybind-groups"></div>
+          <p class="keybind-tip">录制中按 <kbd>Esc</kbd> 取消。同一按键可绑定多个动作。</p>
+          <p class="keybind-status" id="keybindStatus" role="status" aria-live="polite"></p>
+          <div class="modal-actions">
+            <button type="button" class="ghost-button" id="keybindResetBtn">恢复默认</button>
+            <button type="button" class="primary-button" id="keybindDoneBtn">完成</button>
           </div>
         </div>
       </section>
@@ -253,15 +271,15 @@
         <button type="button" class="quick-btn" id="dodgeBtn" aria-label="闪避，空格键">
           <span class="quick-glyph">闪</span>
           <span class="quick-body">
-            <span class="quick-title">闪避 <kbd>空格</kbd></span>
+            <span class="quick-title">闪避 <kbd id="dodgeKeyHint">空格</kbd></span>
           </span>
           <span class="quick-cd" id="dodgeCd">就绪</span>
         </button>
         <button type="button" class="quick-btn" id="counterBtn" aria-label="反制，右键">
           <span class="quick-glyph">反</span>
           <span class="quick-body">
-            <span class="quick-title">反制 <kbd>右键</kbd></span>
-            <span class="quick-sub">50 灵力 · 对方刀光时按右键</span>
+            <span class="quick-title">反制 <kbd id="counterKeyHint">右键</kbd></span>
+            <span class="quick-sub" id="counterSub">50 灵力 · 对方刀光时按右键</span>
           </span>
           <span class="quick-cd" id="counterCd">就绪</span>
         </button>
@@ -278,7 +296,7 @@
       </div>
     </section>
 
-    <div class="field-hint" aria-hidden="true">WASD 移动 · 左键挥剑 · 右键御灵（按住连发 / 刀光时反制） · 空格闪避 · 灵力满 100 自动凝魄 · 拖动卡牌施放</div>
+    <div class="field-hint" id="fieldHint" aria-hidden="true">WASD 移动 · 左键挥剑 · 右键御灵（按住连发 / 刀光时反制） · 空格闪避 · 灵力满 100 自动凝魄 · 拖动卡牌施放</div>
   </div>
 
   <script src="game.js" defer></script>

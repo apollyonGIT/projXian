@@ -226,7 +226,40 @@
   const STORAGE_KEYS = Object.freeze({
     settings: 'wendao.doufa.settings.v1',
     history: 'wendao.doufa.history.v1',
+    bindings: 'wendao.doufa.bindings.v1',
   });
+
+  const DEFAULT_KEYBINDS = Object.freeze({
+    card1: 'Digit1',
+    card2: 'Digit2',
+    card3: 'Digit3',
+    card4: 'Digit4',
+    card5: 'Digit5',
+    up: 'KeyW',
+    down: 'KeyS',
+    left: 'KeyA',
+    right: 'KeyD',
+    dodge: 'Space',
+    melee: 'Mouse0',
+    orb: 'Mouse2',
+    counter: 'Mouse2',
+  });
+
+  const KEYBIND_DEFS = Object.freeze([
+    { id: 'card1', label: '手牌一', group: '五张手牌' },
+    { id: 'card2', label: '手牌二', group: '五张手牌' },
+    { id: 'card3', label: '手牌三', group: '五张手牌' },
+    { id: 'card4', label: '手牌四', group: '五张手牌' },
+    { id: 'card5', label: '手牌五', group: '五张手牌' },
+    { id: 'up', label: '向上移动', group: '移动' },
+    { id: 'down', label: '向下移动', group: '移动' },
+    { id: 'left', label: '向左移动', group: '移动' },
+    { id: 'right', label: '向右移动', group: '移动' },
+    { id: 'dodge', label: '贴地闪避', group: '行动' },
+    { id: 'melee', label: '近战挥剑', group: '行动' },
+    { id: 'orb', label: '发射灵子', group: '行动' },
+    { id: 'counter', label: '反制', group: '行动' },
+  ]);
 
   const OBSTACLE_DEFS = [
     { kind: 'rock', nx: 0.5, ny: 0.39, nr: 0.099, seed: 173 },
@@ -329,6 +362,21 @@
     dodgeCd: $('dodgeCd'),
     counterBtn: $('counterBtn'),
     counterCd: $('counterCd'),
+    dodgeKeyHint: $('dodgeKeyHint'),
+    counterKeyHint: $('counterKeyHint'),
+    counterSub: $('counterSub'),
+    fieldHint: $('fieldHint'),
+    controlMoveKeys: $('controlMoveKeys'),
+    controlMeleeKeys: $('controlMeleeKeys'),
+    controlOrbKeys: $('controlOrbKeys'),
+    controlDodgeKeys: $('controlDodgeKeys'),
+    controlCardKeys: $('controlCardKeys'),
+    keybindBtn: $('keybindBtn'),
+    keybindScreen: $('keybindScreen'),
+    keybindGroups: $('keybindGroups'),
+    keybindStatus: $('keybindStatus'),
+    keybindResetBtn: $('keybindResetBtn'),
+    keybindDoneBtn: $('keybindDoneBtn'),
     essencePips: $('essencePips'),
     essenceValue: $('essenceValue'),
     playerEssenceChip: $('playerEssenceChip'),
@@ -434,6 +482,7 @@
     hasMouse: false,
     pointerInside: false,
     orbHeld: false,
+    orbSources: new Set(),
   };
 
   const game = {
@@ -450,6 +499,7 @@
     player: null,
     enemy: null,
     settings: loadSettings(),
+    bindings: loadBindings(),
     history: loadHistory(),
     projectiles: [],
     effects: [],
@@ -562,6 +612,240 @@
     } catch (error) {
       /* localStorage may be unavailable under strict file policies. */
     }
+  }
+
+  function loadBindings() {
+    const result = { ...DEFAULT_KEYBINDS };
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.bindings);
+      if (!raw) return result;
+      const parsed = JSON.parse(raw);
+      for (const key of Object.keys(DEFAULT_KEYBINDS)) {
+        if (typeof parsed[key] === 'string' && parsed[key].length > 0 && parsed[key].length <= 24) {
+          result[key] = parsed[key];
+        }
+      }
+    } catch (error) {
+      return result;
+    }
+    return result;
+  }
+
+  function saveBindings() {
+    try {
+      localStorage.setItem(STORAGE_KEYS.bindings, JSON.stringify(game.bindings));
+    } catch (error) {
+      /* Ignore storage failures: rebinding still works for this session. */
+    }
+  }
+
+  function bindingCode(action) {
+    return (action && game.bindings[action]) || '';
+  }
+
+  function actionsForCode(code) {
+    return Object.keys(game.bindings).filter((action) => game.bindings[action] === code);
+  }
+
+  function isBoundTo(code, action) {
+    return Boolean(action && game.bindings[action] === code);
+  }
+
+  function isMovementCode(code) {
+    return ['up', 'down', 'left', 'right'].some((action) => isBoundTo(code, action));
+  }
+
+  function bindingLabel(code) {
+    if (!code) return '未绑定';
+    if (code === 'Mouse0') return '左键';
+    if (code === 'Mouse1') return '中键';
+    if (code === 'Mouse2') return '右键';
+    if (code.startsWith('Mouse')) return `鼠标${Number(code.slice(5)) + 1}`;
+    const keyMap = {
+      Space: '空格',
+      ShiftLeft: '左Shift',
+      ShiftRight: '右Shift',
+      ControlLeft: '左Ctrl',
+      ControlRight: '右Ctrl',
+      AltLeft: '左Alt',
+      AltRight: '右Alt',
+      ArrowUp: '↑',
+      ArrowDown: '↓',
+      ArrowLeft: '←',
+      ArrowRight: '→',
+      Escape: 'Esc',
+      Enter: 'Enter',
+      Tab: 'Tab',
+      Backspace: '退格',
+      CapsLock: 'Caps',
+      Minus: '-',
+      Equal: '=',
+      BracketLeft: '[',
+      BracketRight: ']',
+      Backslash: '\\',
+      Semicolon: ';',
+      Quote: "'",
+      Comma: ',',
+      Period: '.',
+      Slash: '/',
+      Backquote: '`',
+    };
+    if (keyMap[code]) return keyMap[code];
+    if (code.startsWith('Key')) return code.slice(3);
+    if (code.startsWith('Digit')) return code.slice(5);
+    if (code.startsWith('Numpad')) return `Num${code.slice(6)}`;
+    return code;
+  }
+
+  function bindingGlyph(code) {
+    if (code === 'Space') return '空';
+    if (code === 'Mouse0') return '左';
+    if (code === 'Mouse1') return '中';
+    if (code === 'Mouse2') return '右';
+    if (code.startsWith('Mouse')) return 'M';
+    if (code === 'ArrowUp') return '↑';
+    if (code === 'ArrowDown') return '↓';
+    if (code === 'ArrowLeft') return '←';
+    if (code === 'ArrowRight') return '→';
+    const label = bindingLabel(code);
+    return label.length > 4 ? label.slice(0, 3) : label;
+  }
+
+  const keybindState = {
+    listening: null,
+    status: '',
+  };
+
+  function keybindDef(action) {
+    return KEYBIND_DEFS.find((item) => item.id === action) || null;
+  }
+
+  function renderKeybindScreen() {
+    if (!dom.keybindGroups) return;
+    dom.keybindGroups.textContent = '';
+    const groups = new Map();
+    for (const def of KEYBIND_DEFS) {
+      if (!groups.has(def.group)) groups.set(def.group, []);
+      groups.get(def.group).push(def);
+    }
+    for (const [groupName, defs] of groups) {
+      const group = document.createElement('div');
+      group.className = 'keybind-group';
+      const heading = document.createElement('h3');
+      heading.textContent = groupName;
+      const list = document.createElement('div');
+      list.className = 'keybind-list';
+      for (const def of defs) {
+        const row = document.createElement('div');
+        row.className = 'keybind-row';
+        const label = document.createElement('span');
+        label.className = 'keybind-label';
+        label.textContent = def.label;
+        const slot = document.createElement('button');
+        slot.type = 'button';
+        slot.className = 'keycap keybind-slot';
+        slot.dataset.action = def.id;
+        slot.setAttribute('aria-label', `${def.label}：${bindingLabel(game.bindings[def.id])}，点击改键`);
+        if (keybindState.listening === def.id) {
+          slot.classList.add('is-listening');
+          slot.textContent = '按键…';
+        } else {
+          slot.textContent = bindingLabel(game.bindings[def.id]);
+        }
+        slot.addEventListener('pointerdown', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          startKeybindListen(def.id);
+        });
+        row.append(label, slot);
+        list.appendChild(row);
+      }
+      group.append(heading, list);
+      dom.keybindGroups.appendChild(group);
+    }
+    if (dom.keybindStatus) dom.keybindStatus.textContent = keybindState.status;
+  }
+
+  function refreshBindingHints() {
+    const label = (action) => bindingLabel(game.bindings[action]);
+    const cardKeys = [1, 2, 3, 4, 5].map((i) => label(`card${i}`)).join(' ');
+    if (dom.controlMoveKeys) {
+      dom.controlMoveKeys.textContent = `${label('up')} ${label('left')} ${label('down')} ${label('right')}`;
+    }
+    if (dom.controlMeleeKeys) dom.controlMeleeKeys.textContent = label('melee');
+    if (dom.controlOrbKeys) {
+      dom.controlOrbKeys.textContent =
+        game.bindings.orb === game.bindings.counter
+          ? label('orb')
+          : `${label('orb')} / ${label('counter')}`;
+    }
+    if (dom.controlDodgeKeys) dom.controlDodgeKeys.textContent = label('dodge');
+    if (dom.controlCardKeys) dom.controlCardKeys.textContent = cardKeys.replace(/ /g, ' ');
+    if (dom.dodgeKeyHint) dom.dodgeKeyHint.textContent = label('dodge');
+    if (dom.counterKeyHint) dom.counterKeyHint.textContent = label('counter');
+    if (dom.dodgeBtn) dom.dodgeBtn.setAttribute('aria-label', `闪避，${label('dodge')}`);
+    if (dom.counterBtn) dom.counterBtn.setAttribute('aria-label', `反制，${label('counter')}`);
+    if (dom.counterSub) dom.counterSub.textContent = `50 灵力 · 对方刀光时按${label('counter')}`;
+    if (dom.handTip) {
+      dom.handTip.textContent = `拖动卡牌到场中施放 · 精魄即费用 · ${cardKeys} 快捷施放`;
+    }
+    if (dom.fieldHint) {
+      dom.fieldHint.textContent =
+        `${label('up')}${label('left')}${label('down')}${label('right')} 移动 · ` +
+        `${label('melee')} 挥剑 · ${label('orb')} 御灵（按住连发 / ${label('counter')} 反制） · ` +
+        `${label('dodge')} 闪避 · 灵力满 100 自动凝魄 · 拖动卡牌施放`;
+    }
+    game.online.cardSignature = '';
+  }
+
+  function startKeybindListen(action) {
+    const def = keybindDef(action);
+    if (!def) return;
+    keybindState.listening = action;
+    keybindState.status = `正在录制「${def.label}」：按键盘按键或鼠标键，Esc 取消。`;
+    renderKeybindScreen();
+  }
+
+  function captureKeybind(code) {
+    const action = keybindState.listening;
+    if (!action) return;
+    game.bindings[action] = code;
+    saveBindings();
+    const def = keybindDef(action);
+    keybindState.listening = null;
+    keybindState.status = `「${def ? def.label : action}」已绑定为 ${bindingLabel(code)}。`;
+    renderKeybindScreen();
+    refreshBindingHints();
+  }
+
+  function cancelKeybindListen() {
+    keybindState.listening = null;
+    keybindState.status = '已取消录制。';
+    renderKeybindScreen();
+  }
+
+  function openKeybindScreen() {
+    if (!dom.keybindScreen || game.mode !== 'start') return;
+    keybindState.listening = null;
+    keybindState.status = '设置会自动保存，下次打开仍然生效。';
+    renderKeybindScreen();
+    dom.keybindScreen.hidden = false;
+  }
+
+  function closeKeybindScreen() {
+    if (!dom.keybindScreen) return;
+    keybindState.listening = null;
+    keybindState.status = '';
+    dom.keybindScreen.hidden = true;
+  }
+
+  function resetBindings() {
+    game.bindings = { ...DEFAULT_KEYBINDS };
+    saveBindings();
+    keybindState.listening = null;
+    keybindState.status = '已恢复默认按键。';
+    renderKeybindScreen();
+    refreshBindingHints();
   }
 
   function loadHistory() {
@@ -1082,7 +1366,7 @@
 
   function startBattle() {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-    input.orbHeld = false;
+    releaseAllOrbSources();
     closeSettings(false, true);
     closeCardCodex();
     resetMatch();
@@ -2740,7 +3024,7 @@
     };
   }
 
-  function playerOrb(autoAim = false) {
+  function playerOrb(autoAim = false, allowCounter = null) {
     if (isOnlineGuest()) {
       game.online.lastOrbActionAt = performance.now();
       const angle = getGuestAimAngle(autoAim);
@@ -2748,8 +3032,10 @@
       return;
     }
     if (!canAct(game.player)) return;
-    // 对方刀光期间按右键 = 反制，不发射灵子。
-    if (tryCounter(game.player)) {
+    const counterAllowed =
+      allowCounter === null ? game.bindings.orb === game.bindings.counter : Boolean(allowCounter);
+    // 反制与御灵共用按键时，对方刀光期间优先反制；分开绑定后各司其职。
+    if (counterAllowed && tryCounter(game.player)) {
       // 反制这一下不算御灵起手，避免按住右键在锁定结束后自动续射。
       input.orbHeld = false;
       return;
@@ -2759,12 +3045,9 @@
 
   function playerDodge() {
     if (isOnlineGuest()) {
-      let dx = 0;
-      let dy = 0;
-      if (input.keys.has('KeyW') || input.keys.has('ArrowUp')) dy -= 1;
-      if (input.keys.has('KeyS') || input.keys.has('ArrowDown')) dy += 1;
-      if (input.keys.has('KeyA') || input.keys.has('ArrowLeft')) dx -= 1;
-      if (input.keys.has('KeyD') || input.keys.has('ArrowRight')) dx += 1;
+      const move = readMovementInput();
+      const dx = move.x;
+      const dy = move.y;
       const angle = dx !== 0 || dy !== 0 ? Math.atan2(dy, dx) : getGuestAimAngle(true);
       sendGuestAction('dodge', angle);
       return;
@@ -2783,25 +3066,38 @@
   }
 
   function readMovementInput() {
-    const held = (...codes) => codes.filter((code) => input.keys.has(code));
-    const pickAxis = (negativeCodes, positiveCodes) => {
-      const negative = held(...negativeCodes);
-      const positive = held(...positiveCodes);
-      if (negative.length > 0 && positive.length > 0) {
-        const negativeTime = Math.max(...negative.map((code) => input.keyTime[code] || 0));
-        const positiveTime = Math.max(...positive.map((code) => input.keyTime[code] || 0));
-        // 同时按住相反方向时，以「后按下」的方向为准；这也能避免 W 键
-        // 的 keyup 丢失后一直抵消 S（表现为只能左右移动）。
+    const held = (action) => {
+      const code = bindingCode(action);
+      return code && input.keys.has(code) ? code : null;
+    };
+    const pickAxis = (negativeAction, positiveAction) => {
+      const negative = held(negativeAction);
+      const positive = held(positiveAction);
+      if (negative && positive) {
+        const negativeTime = input.keyTime[negative] || 0;
+        const positiveTime = input.keyTime[positive] || 0;
+        // 同时按住相反方向时，以「后按下」的方向为准。
         return positiveTime > negativeTime ? 1 : -1;
       }
-      if (positive.length > 0) return 1;
-      if (negative.length > 0) return -1;
+      if (positive) return 1;
+      if (negative) return -1;
       return 0;
     };
     return {
-      x: pickAxis(['KeyA', 'ArrowLeft'], ['KeyD', 'ArrowRight']),
-      y: pickAxis(['KeyW', 'ArrowUp'], ['KeyS', 'ArrowDown']),
+      x: pickAxis('left', 'right'),
+      y: pickAxis('up', 'down'),
     };
+  }
+
+  function setOrbSource(source, active) {
+    if (active) input.orbSources.add(source);
+    else input.orbSources.delete(source);
+    input.orbHeld = input.orbSources.size > 0;
+  }
+
+  function releaseAllOrbSources() {
+    input.orbSources.clear();
+    input.orbHeld = false;
   }
 
   function updatePlayer(dt) {
@@ -6157,6 +6453,17 @@
     fighter.buffAppliedAt[kind] = game.buffSerial;
   }
 
+  function applyWindBuff(fighter, duration) {
+    if (!fighter) return;
+    fighter.speedBoostTimer = duration;
+    markBuffApplied(fighter, 'speed');
+    if (fighter.stunRemaining > 0) {
+      fighter.stunRemaining = 0;
+      spawnFloater(fighter.x, fighter.y - 74 * world.scale, '解晕', '#ffe6a8', 0.8, 14);
+      if (fighter === game.player) showToast('轻身术解除了眩晕', '', 1000);
+    }
+  }
+
   function stealOneBuff(fighter) {
     const opponent = otherFighter(fighter);
     if (!opponent) return null;
@@ -6176,9 +6483,8 @@
       }
     }
     if (pick === 'speed') {
-      fighter.speedBoostTimer = CARD_LIBRARY.wind.duration;
       opponent.speedBoostTimer = 0;
-      markBuffApplied(fighter, 'speed');
+      applyWindBuff(fighter, CARD_LIBRARY.wind.duration);
       return '轻身术';
     }
     if (pick === 'heal') {
@@ -6208,7 +6514,8 @@
     const state = localCardState();
     const hand = state && Array.isArray(state.hand) ? state.hand : [];
     const player = getLocalFighter();
-    const signature = hand.join('|');
+    const cardKeys = [1, 2, 3, 4, 5].map((i) => game.bindings[`card${i}`]).join(',');
+    const signature = `${hand.join('|')}#${cardKeys}`;
     if (game.cardDrag || game.online.cardSignature === signature) return;
     game.online.cardSignature = signature;
     dom.cardHand.textContent = '';
@@ -6226,13 +6533,19 @@
       const healExhausted = card.id === 'heal' && player && player.healUses >= CONFIG.healUsesPerMatch;
       const stealBlocked =
         (card.id === 'steal' || card.id === 'stealPlus') && player && !hasStealableBuff(otherFighter(player));
+      const keyCode = game.bindings[`card${index + 1}`];
       button.setAttribute(
         'aria-label',
-        `${card.name}，${card.cost} 费：${card.text}${healExhausted ? '（本局已用尽）' : ''}`
+        `${card.name}，${card.cost} 费，快捷键 ${bindingLabel(keyCode)}：${card.text}${healExhausted ? '（本局已用尽）' : ''}`
       );
       if (!player || player.essence < card.cost || game.mode !== 'battle' || healExhausted || stealBlocked) {
         button.classList.add('is-unaffordable');
       }
+      const keycap = document.createElement('span');
+      keycap.className = 'keycap card-keycap';
+      keycap.textContent = bindingGlyph(keyCode);
+      keycap.title = `快捷键 ${bindingLabel(keyCode)}`;
+      keycap.setAttribute('aria-hidden', 'true');
       const cost = document.createElement('span');
       cost.className = 'card-cost';
       cost.textContent = `${card.cost}`;
@@ -6248,7 +6561,7 @@
         card.id === 'heal' && player
           ? `${card.text}（已用 ${player.healUses}/${CONFIG.healUsesPerMatch}）`
           : card.text;
-      button.append(cost, art, name, text);
+      button.append(keycap, cost, art, name, text);
       if (card.temporary) {
         const timer = document.createElement('span');
         timer.className = 'card-timer';
@@ -6511,14 +6824,7 @@
       spawnRipple(x, y, '#ffe0a0', 0.5, card.radius * world.scale);
       spawnFloater(x, y - 16 * world.scale, '巨剑术', '#ffe9b0', 0.8, 14);
     } else if (card.id === 'wind') {
-      fighter.speedBoostTimer = card.duration;
-      markBuffApplied(fighter, 'speed');
-      // 轻身术可以解除一次眩晕。
-      if (fighter.stunRemaining > 0) {
-        fighter.stunRemaining = 0;
-        spawnFloater(fighter.x, fighter.y - 74 * world.scale, '解晕', '#ffe6a8', 0.8, 14);
-        if (fighter === game.player) showToast('轻身术解除了眩晕', '', 1000);
-      }
+      applyWindBuff(fighter, card.duration);
       spawnRipple(fighter.x, fighter.y, '#9fe8d6', 0.45, fighter.radius * 2);
       spawnFloater(fighter.x, fighter.y - 58 * world.scale, '轻身', '#b8f0e0', 0.9, 14);
     } else if (card.id === 'heal') {
@@ -8501,7 +8807,7 @@
       return;
     }
     if (game.settingsOpen) return;
-    input.orbHeld = false;
+    releaseAllOrbSources();
     game.settingsOpen = true;
     game.paused = true;
     dom.meleeRangeInput.value = `${game.settings.meleeRange}`;
@@ -8624,13 +8930,13 @@
     window.addEventListener('blur', () => {
       input.keys.clear();
       input.keyTime = Object.create(null);
-      input.orbHeld = false;
+      releaseAllOrbSources();
     });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         input.keys.clear();
         input.keyTime = Object.create(null);
-        input.orbHeld = false;
+        releaseAllOrbSources();
         if (isOnlineHost() && game.online.active) {
           startOnlineBackgroundTicker();
           showToast('房主页面切到后台，已启用后台同步；请尽快切回前台', 'warn', 2400);
@@ -8643,6 +8949,14 @@
     });
 
     dom.startBtn.addEventListener('click', () => startBattle());
+    if (dom.keybindBtn) dom.keybindBtn.addEventListener('click', openKeybindScreen);
+    if (dom.keybindDoneBtn) dom.keybindDoneBtn.addEventListener('click', closeKeybindScreen);
+    if (dom.keybindResetBtn) dom.keybindResetBtn.addEventListener('click', resetBindings);
+    if (dom.keybindScreen) {
+      dom.keybindScreen.addEventListener('click', (event) => {
+        if (event.target === dom.keybindScreen) closeKeybindScreen();
+      });
+    }
     dom.settingsBtn.addEventListener('click', () => {
       if (game.online.active) {
         leaveOnlineRoom({ toStart: true });
@@ -8712,11 +9026,20 @@
       input.mouseY = event.clientY;
       input.hasMouse = true;
       input.pointerInside = true;
-      if (event.button === 0) {
-        playerMelee(false);
-      } else if (event.button === 2) {
-        input.orbHeld = true;
-        playerOrb(false);
+      const code = `Mouse${event.button}`;
+      const actions = actionsForCode(code);
+      if (actions.length === 0) return;
+      const orbBound = actions.includes('orb');
+      const counterBound = actions.includes('counter');
+      if (actions.includes('melee')) playerMelee(false);
+      for (let i = 1; i <= 5; i += 1) {
+        if (actions.includes(`card${i}`)) playCardByIndex(i - 1);
+      }
+      if (actions.includes('dodge')) playerDodge();
+      if (counterBound && !orbBound) requestCounter();
+      if (orbBound) {
+        setOrbSource(`Mouse:${event.button}`, true);
+        playerOrb(false, counterBound);
       }
     });
 
@@ -8756,10 +9079,10 @@
     });
     window.addEventListener('pointerup', (event) => {
       if (game.cardDrag) finishCardDrag(event);
-      if (event.button === 2 || event.button === -1) input.orbHeld = false;
+      if (event.button >= 0) setOrbSource(`Mouse:${event.button}`, false);
     });
     window.addEventListener('pointercancel', () => {
-      input.orbHeld = false;
+      releaseAllOrbSources();
       const drag = game.cardDrag;
       if (!drag) return;
       game.cardDrag = null;
@@ -8767,10 +9090,32 @@
       if (drag.element) drag.element.classList.remove('is-dragging');
     });
 
+    window.addEventListener('pointerdown', (event) => {
+      if (!dom.keybindScreen || dom.keybindScreen.hidden || !keybindState.listening) return;
+      if (event.target.closest('button, input, a, select, textarea')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      captureKeybind(`Mouse${event.button}`);
+    }, true);
+
+    window.addEventListener('contextmenu', (event) => {
+      if (dom.keybindScreen && !dom.keybindScreen.hidden) event.preventDefault();
+    }, true);
+
     window.addEventListener('keydown', (event) => {
       ensureAudio();
       const code = event.code;
-      const isMovement = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(code);
+      if (dom.keybindScreen && !dom.keybindScreen.hidden) {
+        event.preventDefault();
+        if (keybindState.listening) {
+          if (code === 'Escape') cancelKeybindListen();
+          else if (!event.repeat) captureKeybind(code);
+        } else if (code === 'Escape') {
+          closeKeybindScreen();
+        }
+        return;
+      }
+      const isMovement = isMovementCode(code);
 
       if (dom.cardCodexScreen && !dom.cardCodexScreen.hidden) {
         if (code === 'Escape') {
@@ -8804,19 +9149,23 @@
           input.keys.add(code);
           if (code.startsWith('Arrow')) event.preventDefault();
         }
-        if (code === 'Space') {
-          event.preventDefault();
-          if (!event.repeat) playerDodge();
-        } else if (
-          code === 'Digit1' ||
-          code === 'Digit2' ||
-          code === 'Digit3' ||
-          code === 'Digit4' ||
-          code === 'Digit5'
-        ) {
-          event.preventDefault();
-          if (!event.repeat) playCardByIndex(Number(code.slice(5)) - 1);
-        } else if (code === 'Escape') {
+        const actions = actionsForCode(code);
+        if (actions.length > 0) event.preventDefault();
+        if (!event.repeat) {
+          const orbBound = actions.includes('orb');
+          const counterBound = actions.includes('counter');
+          if (actions.includes('dodge')) playerDodge();
+          if (actions.includes('melee')) playerMelee(false);
+          for (let i = 1; i <= 5; i += 1) {
+            if (actions.includes(`card${i}`)) playCardByIndex(i - 1);
+          }
+          if (counterBound && !orbBound) requestCounter();
+          if (orbBound) {
+            setOrbSource(`Key:${code}`, true);
+            playerOrb(false, counterBound);
+          }
+        }
+        if (code === 'Escape') {
           event.preventDefault();
           if (game.online.active) {
             showToast('联机对局中无法打开设置', 'warn', 1200);
@@ -8841,6 +9190,7 @@
     window.addEventListener('keyup', (event) => {
       input.keys.delete(event.code);
       delete input.keyTime[event.code];
+      setOrbSource(`Key:${event.code}`, false);
     });
 
     window.addEventListener('pointerdown', (event) => {
@@ -8860,6 +9210,9 @@
     dom.startScreen.hidden = false;
     dom.settingsScreen.hidden = true;
     dom.resultScreen.hidden = true;
+    if (dom.keybindScreen) dom.keybindScreen.hidden = true;
+    refreshBindingHints();
+    renderKeybindScreen();
     updateMemoryLabels();
     updateHud(true);
     window.requestAnimationFrame(() => {
